@@ -20,12 +20,12 @@ const demoInvoices = [
 ];
 
 const basePayments = [
-  { id: 1, country: "AE", rail: "SWIFT", external_ref: "pay_00001", invoice_id: 2, customer_id: 2, amount: 5538.38 },
-  { id: 3, country: "JP", rail: "SWIFT", external_ref: "pay_00003", invoice_id: 4, customer_id: 4, amount: 10585.51 },
-  { id: 2, country: "DE", rail: "SWIFT", external_ref: "pay_00002", invoice_id: 3, customer_id: 3, amount: 14872.34 },
-  { id: 4, country: "CA", rail: "ACH", external_ref: "pay_00005", invoice_id: 6, customer_id: 6, amount: 22461.86 },
-  { id: 5, country: "US", rail: "ACH", external_ref: "pay_00006", invoice_id: 7, customer_id: 1, amount: 19705.27 },
-  { id: 10, country: "AE", rail: "SWIFT", external_ref: "pay_00013", invoice_id: 14, customer_id: 2, amount: 69280.95 },
+  { id: 1, recipient: "Kairo Retail Group", country: "AE", rail: "SWIFT", external_ref: "pay_00001", invoice_id: 2, customer_id: 2, amount: 5538.38, currency: "AED", status: "settled" },
+  { id: 3, recipient: "Sakura Supply KK", country: "JP", rail: "SWIFT", external_ref: "pay_00003", invoice_id: 4, customer_id: 4, amount: 10585.51, currency: "JPY", status: "settled" },
+  { id: 2, recipient: "Blue Harbor GmbH", country: "DE", rail: "SWIFT", external_ref: "pay_00002", invoice_id: 3, customer_id: 3, amount: 14872.34, currency: "EUR", status: "settled" },
+  { id: 4, recipient: "Maple Cloud Ltd", country: "CA", rail: "ACH", external_ref: "pay_00005", invoice_id: 6, customer_id: 6, amount: 22461.86, currency: "CAD", status: "settled" },
+  { id: 5, recipient: "Northstar Robotics", country: "US", rail: "ACH", external_ref: "pay_00006", invoice_id: 7, customer_id: 1, amount: 19705.27, currency: "USD", status: "settled" },
+  { id: 10, recipient: "Kairo Retail Group", country: "AE", rail: "SWIFT", external_ref: "pay_00013", invoice_id: 14, customer_id: 2, amount: 69280.95, currency: "AED", status: "settled" },
 ];
 
 function storedPayments() {
@@ -112,8 +112,10 @@ function demoResponse(path, options = {}) {
       external_ref: `wallet_pay_${Date.now()}`,
       invoice_id: "",
       customer_id: 999,
+      recipient: body.recipient_name,
       amount: body.amount,
       currency: body.currency,
+      status: "processing",
     };
     localStorage.setItem("ig_demo_payments", JSON.stringify([payment, ...storedPayments()]));
     return { status: "processing", payment_id: payment.id, external_ref: payment.external_ref, recipient: body.recipient_name, amount: body.amount, currency: body.currency };

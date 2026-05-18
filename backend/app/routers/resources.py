@@ -16,7 +16,21 @@ def rows(items):
 
 @router.get("/payments")
 def payments(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    return db.query(Payment).order_by(Payment.received_at.desc()).limit(100).all()
+    records = db.query(Payment, Customer).join(Customer, Payment.customer_id == Customer.id).order_by(Payment.received_at.desc()).limit(100).all()
+    return [
+        {
+            "id": payment.id,
+            "recipient": customer.name,
+            "country": payment.country,
+            "rail": payment.rail,
+            "external_ref": payment.external_ref,
+            "invoice_id": payment.invoice_id,
+            "amount": payment.amount,
+            "currency": payment.currency,
+            "status": payment.status,
+        }
+        for payment, customer in records
+    ]
 
 
 @router.get("/invoices")

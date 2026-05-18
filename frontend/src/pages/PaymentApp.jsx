@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, CheckCircle2, Link as LinkIcon, QrCode, RefreshCw, ScanLine, Search, ShieldCheck } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, CheckCircle2, Link as LinkIcon, QrCode, RefreshCw, ScanLine, ShieldCheck } from "lucide-react";
 import { Card, Skeleton } from "../components/Card.jsx";
 import { api } from "../lib/api.js";
 
@@ -196,19 +196,33 @@ export default function PaymentApp() {
             {message && <div className="mt-4 rounded-md bg-panel p-3 text-sm text-steel">{message}</div>}
           </Card>
 
-          <Card title="Recent Activity">
+          <Card title="Payments List">
             <div className="mt-4 space-y-3">
               {payments.map((payment) => (
                 <div key={payment.id} className="flex items-center justify-between rounded-md border border-slate-200 p-3">
                   <div className="flex items-center gap-3">
-                    <div className="grid h-9 w-9 place-items-center rounded-full bg-panel text-steel"><Search size={16} /></div>
+                    <div className="grid h-9 w-9 place-items-center rounded-full bg-panel text-sm font-semibold text-steel">{(payment.recipient || "P").slice(0, 1)}</div>
                     <div>
-                      <div className="text-sm font-medium">{payment.external_ref}</div>
-                      <div className="text-xs text-steel">{payment.rail} · {payment.country}</div>
+                      <div className="text-sm font-medium">{payment.recipient || "Unknown recipient"}</div>
+                      <div className="text-xs text-steel">{payment.external_ref} | {payment.rail} | {payment.status || "settled"}</div>
                     </div>
                   </div>
                   <div className="text-sm font-semibold">{money(payment.amount, payment.currency || "USD")}</div>
                 </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card title="Recipients">
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              {contacts.map((contact) => (
+                <button key={contact.handle} type="button" onClick={() => setSelected(contact)} className="flex items-center gap-3 rounded-md border border-slate-200 p-3 text-left hover:bg-panel">
+                  <div className={`grid h-10 w-10 place-items-center rounded-full text-sm font-semibold text-white ${contact.color}`}>{contact.name.slice(0, 1)}</div>
+                  <div>
+                    <div className="text-sm font-medium">{contact.name}</div>
+                    <div className="text-xs text-steel">{contact.handle} | {contact.currency}</div>
+                  </div>
+                </button>
               ))}
             </div>
           </Card>

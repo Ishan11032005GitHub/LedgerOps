@@ -14,7 +14,9 @@ export default function DataPage({ type }) {
     else api(`/api/${type}`).then(setRows);
   }, [type]);
   if (!rows) return <Skeleton />;
-  const columns = Object.keys(rows[0] || {}).filter((k) => !["hashed_password", "metadata_json"].includes(k)).slice(0, 7);
+  const preferred = type === "payments" ? ["id", "recipient", "amount", "currency", "status", "rail", "country", "external_ref"] : [];
+  const available = Object.keys(rows[0] || {}).filter((k) => !["hashed_password", "metadata_json"].includes(k));
+  const columns = [...preferred.filter((key) => available.includes(key)), ...available.filter((key) => !preferred.includes(key))].slice(0, 8);
   return (
     <Card title={type.replace("-", " ").toUpperCase()}>
       <div className="mt-4 overflow-auto scrollbar-thin">
