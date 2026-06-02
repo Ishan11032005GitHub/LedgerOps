@@ -4,12 +4,25 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from ..auth import current_user, require_roles
 from ..database import SessionLocal, get_db
-from ..models import Customer, EventLog, Invoice, Payment, Role, Transaction, User
-from ..schemas import PaymentAppConnectIn, PaymentLinkIn, WalletRequestIn, WalletTransferIn
+from ..models import Customer, EventLog, Invoice, Payment, PaymentMethod, Role, Transaction, User
+from ..schemas import PaymentAppConnectIn, PaymentLinkIn, PaymentMethodIn, WalletRequestIn, WalletTransferIn
 from ..services.events import enqueue_event, process_event
-from ..services.payment_provider import create_checkout_link, provider_status, retrieve_checkout_session, verified_stripe_event
+from ..services.payment_provider import charge_saved_card, create_card_setup_session, create_checkout_link, provider_status, retrieve_card_setup_session, retrieve_checkout_session, verified_stripe_event
 
 router = APIRouter(prefix="/api/payment-app", tags=["payment-app"])
+
+
+def payment_method_out(method: PaymentMethod):
+    return {
+        "id": method.id,
+        "label": method.label,
+        "cardholder_name": method.cardholder_name,
+        "brand": method.brand,
+        "last_four": method.last_four,
+        "expiry_month": method.expiry_month,
+        "expiry_year": method.expiry_year,
+        "is_default": method.is_default,
+    }
 
 
 def process_event_background(event_id: int) -> None:
@@ -74,7 +87,92 @@ def status(db: Session = Depends(get_db), user: User = Depends(current_user)):
         "last_sync_at": last_sync.created_at.isoformat() if last_sync else None,
         "webhook_events": db.query(EventLog).count(),
         "mapped_payments": payment_count,
+        "saved_methods": db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).count(),
     }
+
+
+@router.get("/payment-methods")
+def payment_methods(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    methods = db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).order_by(PaymentMethod.is_default.desc(), PaymentMethod.created_at.desc()).all()
+    return [payment_method_out(method) for method in methods]
+
+
+@router.post("/payment-methods", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
+def add_payment_method(payload: PaymentMethodIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    is_first = not db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).first()
+    method = PaymentMethod(user_id=user.id, is_default=is_first, **payload.model_dump())
+    db.add(method)
+    db.commit()
+    db.refresh(method)
+    return payment_method_out(method)
+
+
+@router.post("/payment-methods/setup", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
+async def start_payment_method_setup(user: User = Depends(current_user)):
+    checkout = await create_card_setup_session(user)
+    if not checkout:
+        return {"mode": "manual"}
+    return {"mode": checkout.mode, "checkout_id": checkout.checkout_id, "checkout_url": checkout.checkout_url}
+
+
+@router.post("/payment-methods/setup/{checkout_id}/complete", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
+async def complete_payment_method_setup(checkout_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    session = await retrieve_card_setup_session(checkout_id)
+    if str(session.get("metadata", {}).get("infinityguard_user_id")) != str(user.id):
+        raise HTTPException(status_code=403, detail="Card setup session does not belong to this account")
+    setup_intent = session.get("setup_intent") or {}
+    payment_method = setup_intent.get("payment_method") if isinstance(setup_intent, dict) else None
+    card = payment_method.get("card") if isinstance(payment_method, dict) else None
+    if not card or not payment_method.get("id") or not session.get("customer"):
+        raise HTTPException(status_code=400, detail="Card setup has not been completed")
+    provider_token = f"{session['customer']}:{payment_method['id']}"
+    existing = db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id, PaymentMethod.provider_token == provider_token).first()
+    if existing:
+        return payment_method_out(existing)
+    is_first = not db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).first()
+    method = PaymentMethod(
+        user_id=user.id,
+        label=f"{card.get('brand', 'Card').title()} card",
+        cardholder_name=user.name,
+        brand=card.get("brand", "card").replace("_", " ").title(),
+        last_four=card["last4"],
+        expiry_month=card["exp_month"],
+        expiry_year=card["exp_year"],
+        is_default=is_first,
+        provider_token=provider_token,
+    )
+    db.add(method)
+    db.commit()
+    db.refresh(method)
+    return payment_method_out(method)
+
+
+@router.patch("/payment-methods/{method_id}/default", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
+def set_default_payment_method(method_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    method = db.query(PaymentMethod).filter(PaymentMethod.id == method_id, PaymentMethod.user_id == user.id).first()
+    if not method:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).update({PaymentMethod.is_default: False})
+    method.is_default = True
+    db.commit()
+    db.refresh(method)
+    return payment_method_out(method)
+
+
+@router.delete("/payment-methods/{method_id}", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
+def remove_payment_method(method_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    method = db.query(PaymentMethod).filter(PaymentMethod.id == method_id, PaymentMethod.user_id == user.id).first()
+    if not method:
+        raise HTTPException(status_code=404, detail="Payment method not found")
+    was_default = method.is_default
+    db.delete(method)
+    db.commit()
+    if was_default:
+        next_method = db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).order_by(PaymentMethod.created_at.desc()).first()
+        if next_method:
+            next_method.is_default = True
+            db.commit()
+    return {"status": "removed", "id": method_id}
 
 
 @router.post("/connect", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
@@ -186,28 +284,35 @@ async def verify_checkout(checkout_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/pay", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
-def pay(payload: WalletTransferIn, background: BackgroundTasks, db: Session = Depends(get_db)):
+async def pay(payload: WalletTransferIn, background: BackgroundTasks, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    method = None
+    if payload.payment_method_id:
+        method = db.query(PaymentMethod).filter(PaymentMethod.id == payload.payment_method_id, PaymentMethod.user_id == user.id).first()
+        if not method:
+            raise HTTPException(status_code=404, detail="Payment method not found")
     customer = db.query(Customer).filter(Customer.name == payload.recipient_name).first()
     if not customer:
         customer = Customer(name=payload.recipient_name, country="US", currency=payload.currency, risk_rating="Medium", kyc_status="Review")
         db.add(customer)
         db.flush()
-    external_ref = f"wallet_pay_{int(datetime.utcnow().timestamp())}"
+    card_charge = await charge_saved_card(method.provider_token if method else None, payload.amount, payload.currency, f"Payment to {payload.recipient_name}")
+    external_ref = card_charge["id"] if card_charge else f"wallet_pay_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+    payment_rail = f"{method.brand} ending {method.last_four}" if method else payload.rail
     payment = Payment(
         customer_id=customer.id,
         amount=payload.amount,
         currency=payload.currency,
         country=customer.country,
-        status="processing",
-        rail=payload.rail,
+        status="settled" if card_charge else "processing",
+        rail=payment_rail,
         external_ref=external_ref,
     )
     db.add(payment)
     db.flush()
     db.add(Transaction(payment_id=payment.id, type="outbound", amount=payload.amount, currency=payload.currency, country=customer.country, counterparty=payload.recipient_name, risk_score=22))
-    event = enqueue_event(db, "wallet.payment.sent", payload.model_dump() | {"payment_id": payment.id, "external_ref": external_ref})
+    event = enqueue_event(db, "wallet.payment.sent", payload.model_dump() | {"payment_id": payment.id, "external_ref": external_ref, "funding_source": payment_rail})
     background.add_task(process_event_background, event.id)
-    return {"status": "processing", "payment_id": payment.id, "external_ref": external_ref, "recipient": payload.recipient_name, "amount": payload.amount, "currency": payload.currency}
+    return {"status": payment.status, "payment_id": payment.id, "external_ref": external_ref, "recipient": payload.recipient_name, "amount": payload.amount, "currency": payload.currency, "funding_source": payment_rail}
 
 
 @router.post("/request", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])

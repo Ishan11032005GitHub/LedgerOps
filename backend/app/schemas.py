@@ -19,6 +19,32 @@ class RefreshIn(BaseModel):
     refresh_token: str
 
 
+class ProfileUpdateIn(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+
+
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(min_length=20)
+    new_password: str = Field(min_length=8)
+
+
+class AccountPreferencesIn(BaseModel):
+    paymentAlerts: bool = True
+    riskAlerts: bool = True
+    weeklyDigest: bool = False
+    currency: str = Field(default="USD", min_length=3, max_length=8)
+    timezone: str = Field(default="Asia/Kolkata", max_length=80)
+
+
 class PaymentWebhookIn(BaseModel):
     external_ref: str
     customer_name: str
@@ -71,6 +97,15 @@ class PaymentLinkIn(BaseModel):
     success_url: str | None = None
 
 
+class PaymentMethodIn(BaseModel):
+    label: str = Field(min_length=2, max_length=80)
+    cardholder_name: str = Field(min_length=2, max_length=120)
+    brand: str = Field(min_length=2, max_length=30)
+    last_four: str = Field(pattern=r"^\d{4}$")
+    expiry_month: int = Field(ge=1, le=12)
+    expiry_year: int = Field(ge=2026, le=2100)
+
+
 class WalletTransferIn(BaseModel):
     recipient_name: str
     recipient_handle: str
@@ -78,6 +113,7 @@ class WalletTransferIn(BaseModel):
     currency: str = "USD"
     note: str | None = None
     rail: str = "Wallet"
+    payment_method_id: int | None = None
 
 
 class WalletRequestIn(BaseModel):

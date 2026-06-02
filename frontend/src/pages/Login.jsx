@@ -46,7 +46,10 @@ export default function Login({ mode = "login" }) {
         )}
         <label className={`${isSignup ? "mt-4 block" : ""} text-sm font-medium`}>Email</label>
         <input value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
-        <label className="mt-4 block text-sm font-medium">Password</label>
+        <div className="mt-4 flex items-center justify-between gap-3">
+          <label className="text-sm font-medium">Password</label>
+          {!isSignup && <Link to="/forgot-password" className="text-sm font-medium text-mint hover:text-emerald-700">Forgot password?</Link>}
+        </div>
         <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
         {error && <div className="mt-3 rounded-md bg-coral/10 p-3 text-sm text-coral">{error}</div>}
         <button className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-mint px-4 py-2.5 font-medium text-white hover:bg-emerald-700">

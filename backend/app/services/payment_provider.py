@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import httpx
 from fastapi import HTTPException, Request
 from ..config import get_settings
-from ..models import Customer, Invoice
+from ..models import Customer, Invoice, User
 
 
 @dataclass
@@ -101,6 +101,85 @@ async def retrieve_checkout_session(checkout_id: str) -> dict:
     if response.status_code >= 400:
         detail = response.json().get("error", {}).get("message", "Stripe checkout session lookup failed")
         raise HTTPException(status_code=502, detail=detail)
+    return response.json()
+
+
+async def create_card_setup_session(user: User) -> CheckoutLink | None:
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        return None
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        customer_response = await client.post(
+            "https://api.stripe.com/v1/customers",
+            data={"email": user.email, "name": user.name, "metadata[infinityguard_user_id]": str(user.id)},
+            auth=(settings.stripe_secret_key, ""),
+        )
+        if customer_response.status_code >= 400:
+            detail = customer_response.json().get("error", {}).get("message", "Card customer setup failed")
+            raise HTTPException(status_code=502, detail=detail)
+        customer_id = customer_response.json()["id"]
+        session_response = await client.post(
+            "https://api.stripe.com/v1/checkout/sessions",
+            data={
+                "mode": "setup",
+                "currency": "usd",
+                "payment_method_types[0]": "card",
+                "customer": customer_id,
+                "success_url": f"{settings.frontend_url}/payment-app?card_setup={{CHECKOUT_SESSION_ID}}",
+                "cancel_url": f"{settings.frontend_url}/payment-app?card_setup=cancelled",
+                "metadata[infinityguard_user_id]": str(user.id),
+            },
+            auth=(settings.stripe_secret_key, ""),
+        )
+    if session_response.status_code >= 400:
+        detail = session_response.json().get("error", {}).get("message", "Card setup session failed")
+        raise HTTPException(status_code=502, detail=detail)
+    payload = session_response.json()
+    return CheckoutLink(provider="Stripe", mode="stripe_test", checkout_id=payload["id"], checkout_url=payload["url"], raw=payload)
+
+
+async def retrieve_card_setup_session(checkout_id: str) -> dict:
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=400, detail="Secure card setup is not configured")
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(
+            f"https://api.stripe.com/v1/checkout/sessions/{checkout_id}",
+            params={"expand[]": "setup_intent.payment_method"},
+            auth=(settings.stripe_secret_key, ""),
+        )
+    if response.status_code >= 400:
+        detail = response.json().get("error", {}).get("message", "Card setup lookup failed")
+        raise HTTPException(status_code=502, detail=detail)
+    return response.json()
+
+
+async def charge_saved_card(provider_token: str | None, amount: float, currency: str, description: str) -> dict | None:
+    settings = get_settings()
+    if not settings.stripe_secret_key or not provider_token:
+        return None
+    try:
+        customer_id, payment_method_id = provider_token.split(":", 1)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Saved card is not ready for payment") from exc
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(
+            "https://api.stripe.com/v1/payment_intents",
+            data={
+                "amount": str(int(round(amount * 100))),
+                "currency": currency.lower(),
+                "customer": customer_id,
+                "payment_method": payment_method_id,
+                "confirm": "true",
+                "off_session": "true",
+                "description": description,
+            },
+            auth=(settings.stripe_secret_key, ""),
+        )
+    if response.status_code >= 400:
+        detail = response.json().get("error", {}).get("message", "Saved card payment failed")
+        raise HTTPException(status_code=402, detail=detail)
     return response.json()
 
 

@@ -37,6 +37,15 @@ function storedPayments() {
   }
 }
 
+function storedMethods() {
+  try {
+    return JSON.parse(localStorage.getItem("ig_demo_methods") || "[]");
+  } catch {
+    localStorage.removeItem("ig_demo_methods");
+    return [];
+  }
+}
+
 function demoUser(payload = {}) {
   return { id: 999, email: payload.email || "admin@infinityguard.ai", name: payload.name || "Avery Shah", role: payload.role || "Admin" };
 }
@@ -52,6 +61,24 @@ function demoResponse(path, options = {}) {
 
   if (path === "/api/auth/login") return demoTokenPair(demoUser(body));
   if (path === "/api/auth/signup") return demoTokenPair(demoUser(body));
+  if (path === "/api/auth/me" && method === "GET") return demoUser(JSON.parse(localStorage.getItem("ig_user") || "{}"));
+  if (path === "/api/auth/me" && method === "PATCH") {
+    const user = { ...demoUser(JSON.parse(localStorage.getItem("ig_user") || "{}")), name: body.name };
+    return user;
+  }
+  if (path === "/api/auth/password" && method === "POST") return { status: "updated" };
+  if (path === "/api/auth/forgot-password" && method === "POST") {
+    return {
+      message: "If this email is registered, a password reset link has been prepared.",
+      reset_url: `${window.location.origin}/reset-password?token=offline-reset-token-for-local-testing`,
+    };
+  }
+  if (path === "/api/auth/reset-password" && method === "POST") return { status: "updated", message: "Password reset complete. You can now sign in." };
+  if (path === "/api/auth/preferences" && method === "GET") return JSON.parse(localStorage.getItem("ig_preferences") || JSON.stringify({ paymentAlerts: true, riskAlerts: true, weeklyDigest: false, currency: "USD", timezone: "Asia/Kolkata" }));
+  if (path === "/api/auth/preferences" && method === "PATCH") {
+    localStorage.setItem("ig_preferences", JSON.stringify(body));
+    return body;
+  }
   if (path === "/api/payments") return payments;
   if (path === "/api/invoices") return demoInvoices;
   if (path === "/api/customers") return demoCustomers;
@@ -88,7 +115,7 @@ function demoResponse(path, options = {}) {
     };
   }
   if (path === "/api/payment-app/status") {
-    return { provider: "Stripe-compatible payment app", mode: "offline test", connected: true, sync_health: "offline_ready", last_payment_at: null, last_sync_at: localStorage.getItem("ig_demo_last_sync"), webhook_events: storedPayments().length + 3, mapped_payments: payments.length };
+    return { provider: "Secure card network", mode: "offline test", connected: true, sync_health: "offline_ready", last_payment_at: null, last_sync_at: localStorage.getItem("ig_demo_last_sync"), webhook_events: storedPayments().length + 3, mapped_payments: payments.length, saved_methods: storedMethods().length };
   }
   if (path === "/api/payment-app/connect" && method === "POST") {
     localStorage.setItem("ig_demo_payment_connected", "true");
@@ -104,11 +131,33 @@ function demoResponse(path, options = {}) {
     const invoice = demoInvoices.find((item) => item.id === body.invoice_id) || demoInvoices[0];
     return { status: "created", provider: "Stripe", invoice_number: invoice.invoice_number, amount: invoice.amount, currency: invoice.currency, checkout_url: `https://checkout.stripe.com/c/pay/ig_chk_${invoice.id}_${Date.now()}` };
   }
+  if (path === "/api/payment-app/payment-methods" && method === "GET") return storedMethods();
+  if (path === "/api/payment-app/payment-methods/setup" && method === "POST") return { mode: "manual" };
+  if (path === "/api/payment-app/payment-methods" && method === "POST") {
+    const methods = storedMethods();
+    const saved = { id: Date.now(), ...body, is_default: methods.length === 0 };
+    localStorage.setItem("ig_demo_methods", JSON.stringify([saved, ...methods]));
+    return saved;
+  }
+  if (path.match(/^\/api\/payment-app\/payment-methods\/\d+\/default$/) && method === "PATCH") {
+    const methodId = Number(path.split("/")[4]);
+    const methods = storedMethods().map((item) => ({ ...item, is_default: item.id === methodId }));
+    localStorage.setItem("ig_demo_methods", JSON.stringify(methods));
+    return methods.find((item) => item.id === methodId);
+  }
+  if (path.match(/^\/api\/payment-app\/payment-methods\/\d+$/) && method === "DELETE") {
+    const methodId = Number(path.split("/")[4]);
+    let methods = storedMethods().filter((item) => item.id !== methodId);
+    if (methods.length && !methods.some((item) => item.is_default)) methods = methods.map((item, index) => ({ ...item, is_default: index === 0 }));
+    localStorage.setItem("ig_demo_methods", JSON.stringify(methods));
+    return { status: "removed", id: methodId };
+  }
   if (path === "/api/payment-app/pay" && method === "POST") {
+    const method = storedMethods().find((item) => item.id === body.payment_method_id);
     const payment = {
       id: Date.now(),
       country: "US",
-      rail: body.rail || "Wallet Pay",
+      rail: method ? `${method.brand} ending ${method.last_four}` : body.rail || "Wallet Pay",
       external_ref: `wallet_pay_${Date.now()}`,
       invoice_id: "",
       customer_id: 999,
@@ -118,7 +167,7 @@ function demoResponse(path, options = {}) {
       status: "processing",
     };
     localStorage.setItem("ig_demo_payments", JSON.stringify([payment, ...storedPayments()]));
-    return { status: "processing", payment_id: payment.id, external_ref: payment.external_ref, recipient: body.recipient_name, amount: body.amount, currency: body.currency };
+    return { status: "processing", payment_id: payment.id, external_ref: payment.external_ref, recipient: body.recipient_name, amount: body.amount, currency: body.currency, funding_source: payment.rail };
   }
   if (path === "/api/payment-app/request" && method === "POST") {
     localStorage.setItem("ig_demo_last_sync", new Date().toISOString());

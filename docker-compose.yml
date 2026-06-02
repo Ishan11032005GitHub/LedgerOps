@@ -42,6 +42,7 @@ services:
       PAYMENT_PROVIDER_MODE: demo
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      PASSWORD_RESET_PREVIEW: "true"
     ports:
       - "8000:8000"
     depends_on:
