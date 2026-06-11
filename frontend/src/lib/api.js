@@ -1,3 +1,5 @@
+import { accountStorageKey, isSeededDemoAccount, readStoredUser } from "./account.js";
+
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 const demoCustomers = [
@@ -28,26 +30,51 @@ const basePayments = [
   { id: 10, recipient: "Kairo Retail Group", country: "AE", rail: "SWIFT", external_ref: "pay_00013", invoice_id: 14, customer_id: 2, amount: 69280.95, currency: "AED", status: "settled" },
 ];
 
-function storedPayments() {
+function scopedKey(name, user = readStoredUser()) {
+  return `${name}:${accountStorageKey(user)}`;
+}
+
+function storedPayments(user = readStoredUser()) {
   try {
-    return JSON.parse(localStorage.getItem("ig_demo_payments") || "[]");
+    return JSON.parse(localStorage.getItem(scopedKey("ig_demo_payments", user)) || "[]");
   } catch {
-    localStorage.removeItem("ig_demo_payments");
+    localStorage.removeItem(scopedKey("ig_demo_payments", user));
     return [];
   }
 }
 
-function storedMethods() {
+function storedMethods(user = readStoredUser()) {
   try {
-    return JSON.parse(localStorage.getItem("ig_demo_methods") || "[]");
+    return JSON.parse(localStorage.getItem(scopedKey("ig_demo_methods", user)) || "[]");
   } catch {
-    localStorage.removeItem("ig_demo_methods");
+    localStorage.removeItem(scopedKey("ig_demo_methods", user));
     return [];
   }
+}
+
+function storedCompanyUsers() {
+  try {
+    return JSON.parse(localStorage.getItem("ig_company_users") || "[]");
+  } catch {
+    localStorage.removeItem("ig_company_users");
+    return [];
+  }
+}
+
+function saveCompanyUsers(users) {
+  localStorage.setItem("ig_company_users", JSON.stringify(users));
 }
 
 function demoUser(payload = {}) {
-  return { id: 999, email: payload.email || "admin@infinityguard.ai", name: payload.name || "Avery Shah", role: payload.role || "Admin" };
+  const accountType = payload.account_type || payload.accountType || "company";
+  return {
+    id: payload.email ? Math.abs([...payload.email].reduce((sum, char) => sum + char.charCodeAt(0), 0)) : 999,
+    email: payload.email || "admin@infinityguard.ai",
+    name: payload.name || "Avery Shah",
+    role: accountType === "individual" ? "Admin" : payload.role || "Admin",
+    account_type: accountType,
+    workspace_name: payload.workspace_name || payload.workspaceName || (accountType === "individual" ? `${payload.name || "Personal"} account` : "InfinityGuard workspace"),
+  };
 }
 
 function demoTokenPair(user) {
@@ -57,9 +84,22 @@ function demoTokenPair(user) {
 function demoResponse(path, options = {}) {
   const method = options.method || "GET";
   const body = options.body ? JSON.parse(options.body) : {};
-  const payments = [...storedPayments(), ...basePayments];
+  const employee = path === "/api/auth/login" ? storedCompanyUsers().find((member) => member.email.toLowerCase() === String(body.email || "").toLowerCase()) : null;
+  if (path === "/api/auth/login" && employee && employee.demo_password && employee.demo_password !== body.password) throw new Error("Invalid credentials");
+  const activeUser = path === "/api/auth/login" && employee ? employee : path === "/api/auth/login" || path === "/api/auth/signup" ? demoUser(body) : demoUser(readStoredUser());
+  const seededDemo = isSeededDemoAccount(activeUser);
+  const accountPayments = storedPayments(activeUser);
+  const accountMethods = storedMethods(activeUser);
+  const payments = seededDemo ? [...accountPayments, ...basePayments] : accountPayments;
+  const invoices = seededDemo ? demoInvoices : [];
+  const customers = seededDemo ? demoCustomers : [];
+  const alerts = seededDemo ? [
+    { severity: "medium", category: "cash", message: "Delayed invoices could reduce runway below 60 days." },
+    { severity: "medium", category: "fx", message: "EUR exposure rose 18% while volatility is trending upward." },
+    { severity: "high", category: "fraud", message: "JPY payment pattern changed outside normal settlement window." },
+  ] : [];
 
-  if (path === "/api/auth/login") return demoTokenPair(demoUser(body));
+  if (path === "/api/auth/login") return demoTokenPair(activeUser);
   if (path === "/api/auth/signup") return demoTokenPair(demoUser(body));
   if (path === "/api/auth/me" && method === "GET") return demoUser(JSON.parse(localStorage.getItem("ig_user") || "{}"));
   if (path === "/api/auth/me" && method === "PATCH") {
@@ -74,86 +114,107 @@ function demoResponse(path, options = {}) {
     };
   }
   if (path === "/api/auth/reset-password" && method === "POST") return { status: "updated", message: "Password reset complete. You can now sign in." };
-  if (path === "/api/auth/preferences" && method === "GET") return JSON.parse(localStorage.getItem("ig_preferences") || JSON.stringify({ paymentAlerts: true, riskAlerts: true, weeklyDigest: false, currency: "USD", timezone: "Asia/Kolkata" }));
+  if (path === "/api/auth/preferences" && method === "GET") return JSON.parse(localStorage.getItem(scopedKey("ig_preferences", activeUser)) || JSON.stringify({ paymentAlerts: true, riskAlerts: true, weeklyDigest: false, currency: "USD", timezone: "Asia/Kolkata" }));
   if (path === "/api/auth/preferences" && method === "PATCH") {
-    localStorage.setItem("ig_preferences", JSON.stringify(body));
+    localStorage.setItem(scopedKey("ig_preferences", activeUser), JSON.stringify(body));
     return body;
   }
+  if (path === "/api/auth/company/users" && method === "GET") {
+    const members = storedCompanyUsers().filter((member) => member.workspace_name === activeUser.workspace_name);
+    const owner = { ...activeUser, is_active: true, created_at: new Date().toISOString() };
+    return [owner, ...members.filter((member) => member.email !== owner.email)];
+  }
+  if (path === "/api/auth/company/users" && method === "POST") {
+    if (activeUser.account_type !== "company" || activeUser.role !== "Admin") throw new Error("Only company admins can manage employee accounts");
+    const existing = storedCompanyUsers().find((member) => member.email.toLowerCase() === String(body.email || "").toLowerCase());
+    if (existing) throw new Error("Email already registered");
+    const member = {
+      id: Date.now(),
+      email: body.email,
+      name: body.name,
+      role: body.role || "Viewer",
+      account_type: "company",
+      workspace_name: activeUser.workspace_name,
+      is_active: true,
+      created_at: new Date().toISOString(),
+      demo_password: body.password,
+    };
+    saveCompanyUsers([member, ...storedCompanyUsers()]);
+    return member;
+  }
   if (path === "/api/payments") return payments;
-  if (path === "/api/invoices") return demoInvoices;
-  if (path === "/api/customers") return demoCustomers;
+  if (path === "/api/invoices") return invoices;
+  if (path === "/api/customers") return customers;
   if (path === "/api/dashboard") {
+    const currencyExposure = seededDemo ? { USD: 15956, EUR: 99240, JPY: 23990, AED: 85819, CAD: 35300, ZAR: 58943 } : {};
     return {
       total_volume: payments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
-      pending_invoices: demoInvoices.filter((invoice) => invoice.status === "pending").length,
-      cash_runway: 49,
-      currency_exposure: { USD: 15956, EUR: 99240, JPY: 23990, AED: 85819, CAD: 35300, ZAR: 58943 },
-      risk_score: 77.5,
-      alerts: [
-        { severity: "medium", category: "cash", message: "Delayed invoices could reduce runway below 60 days." },
-        { severity: "medium", category: "fx", message: "EUR exposure rose 18% while volatility is trending upward." },
-        { severity: "high", category: "fraud", message: "JPY payment pattern changed outside normal settlement window." },
-      ],
-      monthly_transactions: [
+      pending_invoices: invoices.filter((invoice) => invoice.status === "pending").length,
+      cash_runway: seededDemo ? 49 : 0,
+      currency_exposure: currencyExposure,
+      risk_score: seededDemo ? 77.5 : 0,
+      alerts,
+      monthly_transactions: seededDemo ? [
         { month: "Oct", volume: 38000 }, { month: "Nov", volume: 84000 }, { month: "Dec", volume: 208000 },
         { month: "Jan", volume: 229000 }, { month: "Feb", volume: 235000 }, { month: "Mar", volume: 111000 },
         { month: "Apr", volume: 137000 }, { month: "May", volume: 108000 }, { month: "Jun", volume: 6000 },
-      ],
-      cash_flow: [
+      ] : [],
+      cash_flow: seededDemo ? [
         { month: "Oct", incoming: 38000, expenses: 21000 }, { month: "Nov", incoming: 84000, expenses: 50000 },
         { month: "Dec", incoming: 208000, expenses: 120000 }, { month: "Jan", incoming: 236000, expenses: 134000 },
         { month: "Feb", incoming: 242000, expenses: 137000 }, { month: "Mar", incoming: 109000, expenses: 63000 },
         { month: "Apr", incoming: 138000, expenses: 81000 }, { month: "May", incoming: 107000, expenses: 62000 },
         { month: "Jun", incoming: 6000, expenses: 3000 },
-      ],
-      fx_trends: Array.from({ length: 35 }, (_, index) => ({ currency: ["EUR", "AED", "ZAR", "JPY"][index % 4], rate: 0.6 + (index % 7) / 10, volatility: 18 + ((index * 13) % 62) })),
-      country_heatmap: [
+      ] : [],
+      fx_trends: seededDemo ? Array.from({ length: 35 }, (_, index) => ({ currency: ["EUR", "AED", "ZAR", "JPY"][index % 4], rate: 0.6 + (index % 7) / 10, volatility: 18 + ((index * 13) % 62) })) : [],
+      country_heatmap: seededDemo ? [
         { country: "CA", volume: 239389 }, { country: "JP", volume: 219244 }, { country: "DE", volume: 162469 },
         { country: "AE", volume: 304613 }, { country: "ZA", volume: 95666 }, { country: "US", volume: 130398 },
-      ],
-      anomalies: [{ name: "Atlas Minerals", score: 76, amount: 58943 }, { name: "Sakura Supply KK", score: 82, amount: 23990 }],
+      ] : [],
+      anomalies: seededDemo ? [{ name: "Atlas Minerals", score: 76, amount: 58943 }, { name: "Sakura Supply KK", score: 82, amount: 23990 }] : [],
     };
   }
   if (path === "/api/payment-app/status") {
-    return { provider: "Secure card network", mode: "offline test", connected: true, sync_health: "offline_ready", last_payment_at: null, last_sync_at: localStorage.getItem("ig_demo_last_sync"), webhook_events: storedPayments().length + 3, mapped_payments: payments.length, saved_methods: storedMethods().length };
+    return { provider: "Secure card network", mode: "offline test", connected: true, sync_health: payments.length ? "offline_ready" : "needs_data", last_payment_at: null, last_sync_at: localStorage.getItem(scopedKey("ig_demo_last_sync", activeUser)), webhook_events: accountPayments.length + (seededDemo ? 3 : 0), mapped_payments: payments.length, saved_methods: accountMethods.length };
   }
   if (path === "/api/payment-app/connect" && method === "POST") {
-    localStorage.setItem("ig_demo_payment_connected", "true");
+    localStorage.setItem(scopedKey("ig_demo_payment_connected", activeUser), "true");
     return { status: "connected", provider: body.provider || "Stripe", account_name: body.account_name || "InfinityGuard Treasury", mode: body.mode || "test", event_id: Date.now() };
   }
   if (path === "/api/payment-app/sync-demo" && method === "POST") {
     const payment = { id: Date.now(), country: "US", rail: "Stripe", external_ref: `stripe_pi_${Date.now()}`, invoice_id: "", customer_id: 1, amount: 18420.75 };
-    localStorage.setItem("ig_demo_payments", JSON.stringify([payment, ...storedPayments()]));
-    localStorage.setItem("ig_demo_last_sync", new Date().toISOString());
+    localStorage.setItem(scopedKey("ig_demo_payments", activeUser), JSON.stringify([payment, ...storedPayments(activeUser)]));
+    localStorage.setItem(scopedKey("ig_demo_last_sync", activeUser), new Date().toISOString());
     return { status: "synced", imported_payments: 1, payment_id: payment.id, external_ref: payment.external_ref, event_id: Date.now() };
   }
   if (path === "/api/payment-app/payment-link" && method === "POST") {
-    const invoice = demoInvoices.find((item) => item.id === body.invoice_id) || demoInvoices[0];
+    const invoice = invoices.find((item) => item.id === body.invoice_id);
+    if (!invoice) throw new Error("No pending invoices are available for this account yet.");
     return { status: "created", provider: "Stripe", invoice_number: invoice.invoice_number, amount: invoice.amount, currency: invoice.currency, checkout_url: `https://checkout.stripe.com/c/pay/ig_chk_${invoice.id}_${Date.now()}` };
   }
-  if (path === "/api/payment-app/payment-methods" && method === "GET") return storedMethods();
+  if (path === "/api/payment-app/payment-methods" && method === "GET") return accountMethods;
   if (path === "/api/payment-app/payment-methods/setup" && method === "POST") return { mode: "manual" };
   if (path === "/api/payment-app/payment-methods" && method === "POST") {
-    const methods = storedMethods();
+    const methods = storedMethods(activeUser);
     const saved = { id: Date.now(), ...body, is_default: methods.length === 0 };
-    localStorage.setItem("ig_demo_methods", JSON.stringify([saved, ...methods]));
+    localStorage.setItem(scopedKey("ig_demo_methods", activeUser), JSON.stringify([saved, ...methods]));
     return saved;
   }
   if (path.match(/^\/api\/payment-app\/payment-methods\/\d+\/default$/) && method === "PATCH") {
     const methodId = Number(path.split("/")[4]);
-    const methods = storedMethods().map((item) => ({ ...item, is_default: item.id === methodId }));
-    localStorage.setItem("ig_demo_methods", JSON.stringify(methods));
+    const methods = storedMethods(activeUser).map((item) => ({ ...item, is_default: item.id === methodId }));
+    localStorage.setItem(scopedKey("ig_demo_methods", activeUser), JSON.stringify(methods));
     return methods.find((item) => item.id === methodId);
   }
   if (path.match(/^\/api\/payment-app\/payment-methods\/\d+$/) && method === "DELETE") {
     const methodId = Number(path.split("/")[4]);
-    let methods = storedMethods().filter((item) => item.id !== methodId);
+    let methods = storedMethods(activeUser).filter((item) => item.id !== methodId);
     if (methods.length && !methods.some((item) => item.is_default)) methods = methods.map((item, index) => ({ ...item, is_default: index === 0 }));
-    localStorage.setItem("ig_demo_methods", JSON.stringify(methods));
+    localStorage.setItem(scopedKey("ig_demo_methods", activeUser), JSON.stringify(methods));
     return { status: "removed", id: methodId };
   }
   if (path === "/api/payment-app/pay" && method === "POST") {
-    const method = storedMethods().find((item) => item.id === body.payment_method_id);
+    const method = storedMethods(activeUser).find((item) => item.id === body.payment_method_id);
     const payment = {
       id: Date.now(),
       country: "US",
@@ -166,15 +227,15 @@ function demoResponse(path, options = {}) {
       currency: body.currency,
       status: "processing",
     };
-    localStorage.setItem("ig_demo_payments", JSON.stringify([payment, ...storedPayments()]));
+    localStorage.setItem(scopedKey("ig_demo_payments", activeUser), JSON.stringify([payment, ...storedPayments(activeUser)]));
     return { status: "processing", payment_id: payment.id, external_ref: payment.external_ref, recipient: body.recipient_name, amount: body.amount, currency: body.currency, funding_source: payment.rail };
   }
   if (path === "/api/payment-app/request" && method === "POST") {
-    localStorage.setItem("ig_demo_last_sync", new Date().toISOString());
+    localStorage.setItem(scopedKey("ig_demo_last_sync", activeUser), new Date().toISOString());
     return { status: "requested", request_id: `wallet_req_${Date.now()}`, payer: body.payer_name, amount: body.amount, currency: body.currency };
   }
   if (path.startsWith("/api/predict/") || path === "/api/compliance/check") return { status: "completed", mode: "offline test", recommendation: "Review high-value, delayed, or volatile-currency items before settlement." };
-  if (path === "/api/copilot") return { answer: "Offline test mode: the riskiest invoices are pending high-value invoices in ZAR and EUR, especially INV-2026-1040 and INV-2026-1032.", state_used: { pending_invoices: 3, highest_risk_currency: "ZAR" } };
+  if (path === "/api/copilot") return seededDemo ? { answer: "Offline test mode: the riskiest invoices are pending high-value invoices in ZAR and EUR, especially INV-2026-1040 and INV-2026-1032.", state_used: { pending_invoices: 3, highest_risk_currency: "ZAR" } } : { answer: "This account does not have finance data yet. Add payments, invoices, or a payment provider to start analysis.", state_used: { pending_invoices: 0 } };
   throw new Error("Offline test data is not available for this action.");
 }
 
@@ -204,6 +265,7 @@ export async function login(email, password) {
   localStorage.setItem("ig_access_token", data.access_token);
   localStorage.setItem("ig_refresh_token", data.refresh_token);
   localStorage.setItem("ig_user", JSON.stringify(data.user));
+  window.dispatchEvent(new CustomEvent("ig-account-changed", { detail: data.user }));
   return data.user;
 }
 
@@ -212,5 +274,6 @@ export async function signup(payload) {
   localStorage.setItem("ig_access_token", data.access_token);
   localStorage.setItem("ig_refresh_token", data.refresh_token);
   localStorage.setItem("ig_user", JSON.stringify(data.user));
+  window.dispatchEvent(new CustomEvent("ig-account-changed", { detail: data.user }));
   return data.user;
 }

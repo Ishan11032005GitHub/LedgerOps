@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, CheckCircle2, CreditCard, Link as LinkIcon, Plus, QrCode, RefreshCw, ScanLine, ShieldCheck, Star, Trash2, X } from "lucide-react";
 import { Card, Skeleton } from "../components/Card.jsx";
+import { accountStorageKey, readStoredUser, walletHandle } from "../lib/account.js";
 import { api } from "../lib/api.js";
 
 const contacts = [
@@ -21,16 +22,18 @@ const emptyMethod = {
   expiry_month: "",
   expiry_year: "",
 };
-let paymentAppCache = null;
+const paymentAppCache = {};
 
 export default function PaymentApp() {
-  const [status, setStatus] = useState(paymentAppCache?.status || null);
-  const [payments, setPayments] = useState(paymentAppCache?.payments || []);
-  const [methods, setMethods] = useState(paymentAppCache?.methods || []);
+  const accountKey = accountStorageKey();
+  const cached = paymentAppCache[accountKey];
+  const [status, setStatus] = useState(cached?.status || null);
+  const [payments, setPayments] = useState(cached?.payments || []);
+  const [methods, setMethods] = useState(cached?.methods || []);
   const [selectedMethodId, setSelectedMethodId] = useState("");
   const [showMethodForm, setShowMethodForm] = useState(false);
   const [methodForm, setMethodForm] = useState(emptyMethod);
-  const [invoices, setInvoices] = useState(paymentAppCache?.invoices || []);
+  const [invoices, setInvoices] = useState(cached?.invoices || []);
   const [mode, setMode] = useState("pay");
   const [selected, setSelected] = useState(contacts[0]);
   const [amount, setAmount] = useState("2500");
@@ -42,6 +45,9 @@ export default function PaymentApp() {
   const [link, setLink] = useState(null);
   const [loading, setLoading] = useState("");
   const [loadError, setLoadError] = useState("");
+  const account = readStoredUser();
+  const currentWalletHandle = walletHandle(account);
+  const gatewayBalance = 0;
 
   async function load() {
     setLoadError("");
@@ -54,15 +60,16 @@ export default function PaymentApp() {
     if (statusResult.status === "rejected") throw statusResult.reason;
     const statusData = statusResult.value;
     const invoiceData = invoiceResult.status === "fulfilled" ? invoiceResult.value : [];
+    const pendingInvoices = invoiceData.filter((invoice) => invoice.status === "pending");
     const paymentData = paymentResult.status === "fulfilled" ? paymentResult.value : [];
     const methodData = methodResult.status === "fulfilled" ? methodResult.value : [];
     setStatus(statusData);
-    setInvoices(invoiceData.filter((invoice) => invoice.status === "pending"));
+    setInvoices(pendingInvoices);
     setPayments(paymentData.slice(0, 6));
     setMethods(methodData);
-    paymentAppCache = {
+    paymentAppCache[accountStorageKey()] = {
       status: statusData,
-      invoices: invoiceData.filter((invoice) => invoice.status === "pending"),
+      invoices: pendingInvoices,
       payments: paymentData.slice(0, 6),
       methods: methodData,
     };
@@ -74,13 +81,20 @@ export default function PaymentApp() {
       const preferred = methodData.find((method) => method.is_default) || methodData[0];
       return preferred ? String(preferred.id) : "";
     });
-    if (!invoiceId && invoiceData.length) {
-      const pending = invoiceData.find((invoice) => invoice.status === "pending") || invoiceData[0];
+    if (!pendingInvoices.length) {
+      setInvoiceId("");
+    } else if (!invoiceId || !pendingInvoices.some((invoice) => String(invoice.id) === invoiceId)) {
+      const pending = pendingInvoices[0];
       setInvoiceId(String(pending.id));
     }
   }
 
   useEffect(() => {
+    const cachedAccount = paymentAppCache[accountStorageKey()];
+    setStatus(cachedAccount?.status || null);
+    setPayments(cachedAccount?.payments || []);
+    setMethods(cachedAccount?.methods || []);
+    setInvoices(cachedAccount?.invoices || []);
     const setupSession = new URLSearchParams(window.location.search).get("card_setup");
     if (setupSession === "cancelled") {
       setMessage("Card setup cancelled.");
@@ -102,7 +116,7 @@ export default function PaymentApp() {
     } else {
       load().catch((err) => setLoadError(err.message));
     }
-  }, []);
+  }, [accountKey]);
 
   const selectedInvoice = useMemo(() => invoices.find((invoice) => String(invoice.id) === invoiceId), [invoiceId, invoices]);
   const selectedMethod = useMemo(() => methods.find((method) => String(method.id) === selectedMethodId), [methods, selectedMethodId]);
@@ -270,16 +284,17 @@ export default function PaymentApp() {
           <div className="border-b border-slate-200 p-5">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-medium text-mint">Infinity Pay</div>
-                <h2 className="mt-1 text-2xl font-semibold">Wallet</h2>
+                <div className="text-sm font-medium text-mint">Infinity Gateway</div>
+                <h2 className="mt-1 text-2xl font-semibold">Payment gateway</h2>
               </div>
               <span className={`rounded-full px-3 py-1 text-xs font-medium ${methods.length ? "bg-mint/10 text-mint" : "bg-amber-100 text-amber-700"}`}>{methods.length ? `${methods.length} card${methods.length === 1 ? "" : "s"}` : "Add a card"}</span>
             </div>
             <div className="mt-5 rounded-lg bg-ink p-5 text-white">
-              <div className="text-sm text-white/65">Available balance</div>
-              <div className="mt-2 text-3xl font-semibold">$128,460</div>
+              <div className="text-sm text-white/65">Gateway balance</div>
+              <div className="mt-2 text-3xl font-semibold">{money(gatewayBalance)}</div>
+              <div className="mt-1 text-xs text-white/55">Card balances are not exposed by card networks.</div>
               <div className="mt-4 flex items-center justify-between text-xs text-white/65">
-                <span>Wallet ID: infinity@pay</span>
+                <span>Wallet ID: {currentWalletHandle}</span>
                 <ShieldCheck size={16} />
               </div>
             </div>
@@ -346,7 +361,7 @@ export default function PaymentApp() {
         </section>
 
         <div className="space-y-5">
-          <Card title="Payment Network">
+          <Card title="Payment Gateway">
             <div className="mt-4 grid gap-3 md:grid-cols-4">
               <Metric label="Funding" value="Cards + checkout" />
               <Metric label="Methods" value={status.saved_methods || methods.length} />
@@ -355,10 +370,10 @@ export default function PaymentApp() {
             </div>
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
               <button onClick={beginMethodSetup} disabled={loading === "setup" || loading === "setup-complete"} className="flex items-center justify-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
-                <Plus size={17} /> {loading === "setup" || loading === "setup-complete" ? "Connecting..." : "Add payment card"}
+                <Plus size={17} /> {loading === "setup" || loading === "setup-complete" ? "Connecting..." : "Add funding card"}
               </button>
               <button onClick={syncDemo} disabled={loading === "sync"} className="flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-ink hover:bg-panel disabled:opacity-60">
-                <RefreshCw size={17} /> {loading === "sync" ? "Refreshing..." : "Refresh activity"}
+                <RefreshCw size={17} /> {loading === "sync" ? "Refreshing..." : "Refresh gateway activity"}
               </button>
             </div>
             {message && <div className="mt-4 rounded-md bg-panel p-3 text-sm text-steel">{message}</div>}

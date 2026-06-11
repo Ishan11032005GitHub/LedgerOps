@@ -9,19 +9,21 @@ def seed(db: Session) -> None:
     if db.query(User).first():
         return
 
+    admin = User(email="admin@infinityguard.ai", name="Avery Shah", account_type="company", workspace_name="InfinityGuard workspace", hashed_password=hash_password("AdminPass123"), role=Role.admin)
     db.add_all([
-        User(email="admin@infinityguard.ai", name="Avery Shah", hashed_password=hash_password("AdminPass123"), role=Role.admin),
-        User(email="finance@infinityguard.ai", name="Mira Chen", hashed_password=hash_password("FinancePass123"), role=Role.finance_manager),
-        User(email="viewer@infinityguard.ai", name="Leo Grant", hashed_password=hash_password("ViewerPass123"), role=Role.viewer),
+        admin,
+        User(email="finance@infinityguard.ai", name="Mira Chen", account_type="company", workspace_name="InfinityGuard workspace", hashed_password=hash_password("FinancePass123"), role=Role.finance_manager),
+        User(email="viewer@infinityguard.ai", name="Leo Grant", account_type="company", workspace_name="InfinityGuard workspace", hashed_password=hash_password("ViewerPass123"), role=Role.viewer),
     ])
+    db.flush()
 
     customers = [
-        Customer(name="Northstar Robotics", country="US", currency="USD", risk_rating="Low", avg_delay_days=2, delayed_invoice_count=1, kyc_status="Verified"),
-        Customer(name="Kairo Retail Group", country="AE", currency="AED", risk_rating="Medium", avg_delay_days=7, delayed_invoice_count=3, kyc_status="Verified"),
-        Customer(name="Blue Harbor GmbH", country="DE", currency="EUR", risk_rating="Low", avg_delay_days=1, delayed_invoice_count=0, kyc_status="Verified"),
-        Customer(name="Sakura Supply KK", country="JP", currency="JPY", risk_rating="Medium", avg_delay_days=9, delayed_invoice_count=4, kyc_status="Review"),
-        Customer(name="Atlas Minerals", country="ZA", currency="ZAR", risk_rating="High", avg_delay_days=13, delayed_invoice_count=5, kyc_status="Review"),
-        Customer(name="Maple Cloud Ltd", country="CA", currency="CAD", risk_rating="Low", avg_delay_days=3, delayed_invoice_count=1, kyc_status="Verified"),
+        Customer(user_id=admin.id, name="Northstar Robotics", country="US", currency="USD", risk_rating="Low", avg_delay_days=2, delayed_invoice_count=1, kyc_status="Verified"),
+        Customer(user_id=admin.id, name="Kairo Retail Group", country="AE", currency="AED", risk_rating="Medium", avg_delay_days=7, delayed_invoice_count=3, kyc_status="Verified"),
+        Customer(user_id=admin.id, name="Blue Harbor GmbH", country="DE", currency="EUR", risk_rating="Low", avg_delay_days=1, delayed_invoice_count=0, kyc_status="Verified"),
+        Customer(user_id=admin.id, name="Sakura Supply KK", country="JP", currency="JPY", risk_rating="Medium", avg_delay_days=9, delayed_invoice_count=4, kyc_status="Review"),
+        Customer(user_id=admin.id, name="Atlas Minerals", country="ZA", currency="ZAR", risk_rating="High", avg_delay_days=13, delayed_invoice_count=5, kyc_status="Review"),
+        Customer(user_id=admin.id, name="Maple Cloud Ltd", country="CA", currency="CAD", risk_rating="Low", avg_delay_days=3, delayed_invoice_count=1, kyc_status="Verified"),
     ]
     db.add_all(customers)
     db.flush()
@@ -39,6 +41,7 @@ def seed(db: Session) -> None:
         paid = idx % 4 != 0
         paid_at = due + timedelta(days=rng.randint(-3, 16)) if paid else None
         invoice = Invoice(
+            user_id=admin.id,
             invoice_number=f"INV-{2026}-{1000 + idx}",
             customer_id=customer.id,
             amount=amount,
@@ -55,6 +58,7 @@ def seed(db: Session) -> None:
         db.flush()
         if paid:
             payment = Payment(
+                user_id=admin.id,
                 invoice_id=invoice.id,
                 customer_id=customer.id,
                 amount=amount,
@@ -70,6 +74,7 @@ def seed(db: Session) -> None:
             db.flush()
             transactions.append(Transaction(
                 payment_id=payment.id,
+                user_id=admin.id,
                 type="inbound",
                 amount=amount,
                 currency=customer.currency,
@@ -91,8 +96,8 @@ def seed(db: Session) -> None:
             ))
     db.add_all(transactions)
     db.add_all([
-        Alert(severity="high", category="fraud", message="JPY payment pattern changed outside normal settlement window.", entity_type="transaction", entity_id=8),
-        Alert(severity="medium", category="fx", message="EUR exposure rose 18% while volatility is trending upward.", entity_type="fx", entity_id=None),
-        Alert(severity="medium", category="cash", message="Delayed invoices could reduce runway below 60 days.", entity_type="forecast", entity_id=None),
+        Alert(user_id=admin.id, severity="high", category="fraud", message="JPY payment pattern changed outside normal settlement window.", entity_type="transaction", entity_id=8),
+        Alert(user_id=admin.id, severity="medium", category="fx", message="EUR exposure rose 18% while volatility is trending upward.", entity_type="fx", entity_id=None),
+        Alert(user_id=admin.id, severity="medium", category="cash", message="Delayed invoices could reduce runway below 60 days.", entity_type="forecast", entity_id=None),
     ])
     db.commit()

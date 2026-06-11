@@ -9,13 +9,15 @@ export default function Login({ mode = "login" }) {
   const [email, setEmail] = useState("admin@infinityguard.ai");
   const [password, setPassword] = useState("AdminPass123");
   const [role, setRole] = useState("Finance Manager");
+  const [accountType, setAccountType] = useState("company");
+  const [workspaceName, setWorkspaceName] = useState("InfinityGuard workspace");
   const [error, setError] = useState("");
   const navigate = useNavigate();
   async function submit(e) {
     e.preventDefault();
     setError("");
     try {
-      if (isSignup) await signup({ name, email, password, role });
+      if (isSignup) await signup({ name, email, password, role, account_type: accountType, workspace_name: accountType === "company" ? workspaceName : "" });
       else await login(email, password);
       navigate("/");
     } catch (err) {
@@ -34,14 +36,34 @@ export default function Login({ mode = "login" }) {
         </div>
         {isSignup && (
           <>
+            <div className="mb-4 grid gap-2 sm:grid-cols-2">
+              <button type="button" onClick={() => setAccountType("company")} className={`rounded-md border px-3 py-3 text-left ${accountType === "company" ? "border-mint bg-mint/5" : "border-slate-200 hover:bg-panel"}`}>
+                <span className="block text-sm font-semibold">Company account</span>
+                <span className="mt-1 block text-xs text-steel">Workspace with multiple users and roles.</span>
+              </button>
+              <button type="button" onClick={() => setAccountType("individual")} className={`rounded-md border px-3 py-3 text-left ${accountType === "individual" ? "border-mint bg-mint/5" : "border-slate-200 hover:bg-panel"}`}>
+                <span className="block text-sm font-semibold">Individual account</span>
+                <span className="mt-1 block text-xs text-steel">Personal payments and daily-use finance.</span>
+              </button>
+            </div>
+            {accountType === "company" && (
+              <>
+                <label className="text-sm font-medium">Company / workspace name</label>
+                <input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} className="mt-1 mb-4 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
+              </>
+            )}
             <label className="text-sm font-medium">Full name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
-            <label className="mt-4 block text-sm font-medium">Role</label>
-            <select value={role} onChange={(e) => setRole(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint">
-              <option>Admin</option>
-              <option>Finance Manager</option>
-              <option>Viewer</option>
-            </select>
+            {accountType === "company" && (
+              <>
+                <label className="mt-4 block text-sm font-medium">Role</label>
+                <select value={role} onChange={(e) => setRole(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint">
+                  <option>Admin</option>
+                  <option>Finance Manager</option>
+                  <option>Viewer</option>
+                </select>
+              </>
+            )}
           </>
         )}
         <label className={`${isSignup ? "mt-4 block" : ""} text-sm font-medium`}>Email</label>

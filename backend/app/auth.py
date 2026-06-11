@@ -34,7 +34,7 @@ def token_pair(user: User) -> dict:
         "access_token": create_token(user.email, "access", timedelta(minutes=settings.access_token_minutes), user.role.value),
         "refresh_token": create_token(user.email, "refresh", timedelta(days=settings.refresh_token_days), user.role.value),
         "token_type": "bearer",
-        "user": {"id": user.id, "email": user.email, "name": user.name, "role": user.role.value},
+        "user": {"id": user.id, "email": user.email, "name": user.name, "role": user.role.value, "account_type": user.account_type, "workspace_name": user.workspace_name},
     }
 
 

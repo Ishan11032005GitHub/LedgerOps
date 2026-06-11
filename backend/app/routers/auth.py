@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from ..auth import create_token, current_user, hash_password, token_pair, verify_password
 from ..config import get_settings
 from ..database import get_db
-from ..models import AccountPreference, PasswordResetToken, User
-from ..schemas import AccountPreferencesIn, ForgotPasswordIn, LoginIn, PasswordChangeIn, ProfileUpdateIn, RefreshIn, ResetPasswordIn, SignupIn
+from ..models import AccountPreference, PasswordResetToken, Role, User
+from ..schemas import AccountPreferencesIn, CompanyEmployeeCreateIn, ForgotPasswordIn, LoginIn, PasswordChangeIn, ProfileUpdateIn, RefreshIn, ResetPasswordIn, SignupIn
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -17,7 +17,12 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 def signup(payload: SignupIn, db: Session = Depends(get_db)):
     if db.query(User).filter(User.email == payload.email).first():
         raise HTTPException(status_code=409, detail="Email already registered")
-    user = User(email=payload.email, name=payload.name, role=payload.role, hashed_password=hash_password(payload.password))
+    account_type = payload.account_type
+    workspace_name = payload.workspace_name.strip() if payload.workspace_name else None
+    if account_type == "individual":
+        workspace_name = workspace_name or f"{payload.name}'s personal account"
+    role = Role.admin if account_type == "individual" else payload.role
+    user = User(email=payload.email, name=payload.name, account_type=account_type, workspace_name=workspace_name, role=role, hashed_password=hash_password(payload.password))
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -52,7 +57,7 @@ def refresh(payload: RefreshIn, db: Session = Depends(get_db)):
 
 @router.get("/me")
 def me(user: User = Depends(current_user)):
-    return {"id": user.id, "email": user.email, "name": user.name, "role": user.role.value}
+    return {"id": user.id, "email": user.email, "name": user.name, "role": user.role.value, "account_type": user.account_type, "workspace_name": user.workspace_name}
 
 
 @router.patch("/me")
@@ -60,7 +65,57 @@ def update_me(payload: ProfileUpdateIn, db: Session = Depends(get_db), user: Use
     user.name = payload.name.strip()
     db.commit()
     db.refresh(user)
-    return {"id": user.id, "email": user.email, "name": user.name, "role": user.role.value}
+    return {"id": user.id, "email": user.email, "name": user.name, "role": user.role.value, "account_type": user.account_type, "workspace_name": user.workspace_name}
+
+
+def team_member_out(member: User):
+    return {
+        "id": member.id,
+        "email": member.email,
+        "name": member.name,
+        "role": member.role.value,
+        "account_type": member.account_type,
+        "workspace_name": member.workspace_name,
+        "is_active": member.is_active,
+        "created_at": member.created_at.isoformat() if member.created_at else None,
+    }
+
+
+def require_company_admin(user: User):
+    if user.account_type != "company" or user.role != Role.admin:
+        raise HTTPException(status_code=403, detail="Only company admins can manage employee accounts")
+
+
+@router.get("/company/users")
+def company_users(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_company_admin(user)
+    members = db.query(User).filter(
+        User.account_type == "company",
+        User.workspace_name == user.workspace_name,
+        User.is_active.is_(True),
+    ).order_by(User.created_at.asc()).all()
+    return [team_member_out(member) for member in members]
+
+
+@router.post("/company/users")
+def create_company_user(payload: CompanyEmployeeCreateIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    require_company_admin(user)
+    if payload.role == Role.admin:
+        raise HTTPException(status_code=400, detail="Create employee accounts as Viewer or Finance Manager")
+    if db.query(User).filter(User.email == payload.email).first():
+        raise HTTPException(status_code=409, detail="Email already registered")
+    member = User(
+        email=payload.email,
+        name=payload.name.strip(),
+        account_type="company",
+        workspace_name=user.workspace_name,
+        role=payload.role,
+        hashed_password=hash_password(payload.password),
+    )
+    db.add(member)
+    db.commit()
+    db.refresh(member)
+    return team_member_out(member)
 
 
 @router.post("/password")

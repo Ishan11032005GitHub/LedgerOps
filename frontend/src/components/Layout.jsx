@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Bot, CircleDollarSign, Gauge, LineChart, LogOut, PlugZap, Receipt, SearchCheck, Settings, ShieldAlert, Users, WalletCards } from "lucide-react";
+import { accountCommandTitle, accountSubtitle, readStoredUser } from "../lib/account.js";
 import { prefetchDashboard } from "../pages/Dashboard.jsx";
 import { prefetchDataPage } from "../pages/DataPage.jsx";
 
@@ -19,23 +20,14 @@ const nav = [
   ["Settings", "/settings", Settings],
 ];
 
-function readUser() {
-  try {
-    return JSON.parse(localStorage.getItem("ig_user") || "{}");
-  } catch {
-    localStorage.removeItem("ig_user");
-    return {};
-  }
-}
-
 export default function Layout() {
   const navigate = useNavigate();
   const location = useLocation();
-  const [user, setUser] = useState(readUser);
+  const [user, setUser] = useState(readStoredUser);
 
   useEffect(() => {
     function handleUserUpdated(event) {
-      setUser(event.detail || readUser());
+      setUser(event.detail || readStoredUser());
     }
     window.addEventListener("ig-user-updated", handleUserUpdated);
     return () => window.removeEventListener("ig-user-updated", handleUserUpdated);
@@ -72,9 +64,9 @@ export default function Layout() {
       </aside>
       <main className="min-w-0">
         <header className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white/95 px-5 py-4 backdrop-blur">
-          <div>
-            <div className="text-sm text-steel">Connected payments, cash, FX, fraud, and compliance intelligence</div>
-            <h1 className="text-xl font-semibold">Finance command center</h1>
+          <div className="min-w-0 pr-4">
+            <div className="truncate text-sm text-steel">{accountSubtitle(user)}</div>
+            <h1 className="truncate text-xl font-semibold">{accountCommandTitle(user)}</h1>
           </div>
           <div className="flex items-center gap-3">
             <div className="hidden text-right sm:block">

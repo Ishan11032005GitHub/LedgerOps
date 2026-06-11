@@ -6,8 +6,8 @@ from ..config import get_settings
 from ..models import Alert, EventLog
 
 
-def enqueue_event(db: Session, event_type: str, payload: dict) -> EventLog:
-    event = EventLog(event_type=event_type, payload=payload, status="queued")
+def enqueue_event(db: Session, event_type: str, payload: dict, user_id: int | None = None) -> EventLog:
+    event = EventLog(user_id=user_id, event_type=event_type, payload=payload, status="queued")
     db.add(event)
     db.commit()
     db.refresh(event)
@@ -26,6 +26,7 @@ def process_event(db: Session, event: EventLog) -> None:
     payload = event.payload
     if event.event_type == "payment.received" and payload.get("amount", 0) > 75000:
         db.add(Alert(
+            user_id=event.user_id,
             severity="high",
             category="large-payment",
             message=f"Large {payload.get('currency')} payment received from {payload.get('customer_name')}",
@@ -34,6 +35,7 @@ def process_event(db: Session, event: EventLog) -> None:
         ))
     if event.event_type == "invoice.created" and payload.get("amount", 0) > 40000:
         db.add(Alert(
+            user_id=event.user_id,
             severity="medium",
             category="invoice-exposure",
             message=f"High-value invoice {payload.get('invoice_number')} needs delay-risk scoring",

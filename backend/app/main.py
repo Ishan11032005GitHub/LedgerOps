@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .config import get_settings
-from .database import Base, SessionLocal, engine
+from .database import Base, SessionLocal, engine, migrate_account_columns
 from .routers import auth, intelligence, payment_app, resources, webhooks
 from .seed import seed
 
@@ -20,6 +20,7 @@ app.add_middleware(
 @app.on_event("startup")
 def startup():
     Base.metadata.create_all(bind=engine)
+    migrate_account_columns()
     db = SessionLocal()
     try:
         seed(db)

@@ -8,6 +8,8 @@ class SignupIn(BaseModel):
     name: str
     password: str = Field(min_length=8)
     role: Role = Role.viewer
+    account_type: str = Field(default="company", pattern="^(company|individual)$")
+    workspace_name: str | None = Field(default=None, max_length=160)
 
 
 class LoginIn(BaseModel):
@@ -21,6 +23,13 @@ class RefreshIn(BaseModel):
 
 class ProfileUpdateIn(BaseModel):
     name: str = Field(min_length=2, max_length=120)
+
+
+class CompanyEmployeeCreateIn(BaseModel):
+    email: EmailStr
+    name: str = Field(min_length=2, max_length=120)
+    password: str = Field(min_length=8)
+    role: Role = Role.viewer
 
 
 class PasswordChangeIn(BaseModel):

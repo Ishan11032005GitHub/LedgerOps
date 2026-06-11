@@ -2,6 +2,7 @@ from datetime import datetime
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from ..account_scope import account_user_ids
 from ..auth import current_user, require_roles
 from ..database import SessionLocal, get_db
 from ..models import Customer, EventLog, Invoice, Payment, PaymentMethod, Role, Transaction, User
@@ -35,29 +36,33 @@ def process_event_background(event_id: int) -> None:
         db.close()
 
 
-def record_completed_checkout(db: Session, session: dict, invoice_id: int | None):
+def record_completed_checkout(db: Session, session: dict, invoice_id: int | None, user_id: int | None = None):
     metadata = session.get("metadata") or {}
     resolved_invoice_id = invoice_id or (int(metadata["invoice_id"]) if metadata.get("invoice_id") else None)
+    resolved_user_id = user_id or (int(metadata["infinityguard_user_id"]) if metadata.get("infinityguard_user_id") else None)
     invoice = db.get(Invoice, resolved_invoice_id) if resolved_invoice_id else None
+    if invoice and resolved_user_id and invoice.user_id != resolved_user_id:
+        raise HTTPException(status_code=403, detail="Checkout session does not belong to this account")
     customer = db.get(Customer, invoice.customer_id) if invoice else None
     if invoice:
         invoice.status = "paid"
         invoice.paid_at = datetime.utcnow().date()
     if not customer:
-        customer = db.query(Customer).filter(Customer.name == metadata.get("customer_name", "Stripe customer")).first()
+        customer = db.query(Customer).filter(Customer.user_id == resolved_user_id, Customer.name == metadata.get("customer_name", "Stripe customer")).first()
     if not customer:
-        customer = Customer(name=metadata.get("customer_name", "Stripe customer"), country="US", currency=(session.get("currency") or "usd").upper(), risk_rating="Medium", kyc_status="Review")
+        customer = Customer(user_id=resolved_user_id, name=metadata.get("customer_name", "Stripe customer"), country="US", currency=(session.get("currency") or "usd").upper(), risk_rating="Medium", kyc_status="Review")
         db.add(customer)
         db.flush()
 
     external_ref = session.get("payment_intent") or session.get("id")
-    payment = db.query(Payment).filter(Payment.external_ref == external_ref).first()
+    payment = db.query(Payment).filter(Payment.user_id == resolved_user_id, Payment.external_ref == external_ref).first()
     if not payment:
         amount = (session.get("amount_total") or 0) / 100
         if amount == 0 and invoice:
             amount = invoice.amount
         payment = Payment(
             invoice_id=invoice.id if invoice else None,
+            user_id=resolved_user_id,
             customer_id=customer.id,
             amount=amount,
             currency=(session.get("currency") or customer.currency).upper(),
@@ -68,15 +73,16 @@ def record_completed_checkout(db: Session, session: dict, invoice_id: int | None
         )
         db.add(payment)
         db.flush()
-        db.add(Transaction(payment_id=payment.id, type="inbound", amount=payment.amount, currency=payment.currency, country=payment.country, counterparty=customer.name, risk_score=18))
+        db.add(Transaction(user_id=resolved_user_id, payment_id=payment.id, type="inbound", amount=payment.amount, currency=payment.currency, country=payment.country, counterparty=customer.name, risk_score=18))
     return invoice, payment, customer
 
 
 @router.get("/status")
 def status(db: Session = Depends(get_db), user: User = Depends(current_user)):
-    payment_count = db.query(Payment).count()
-    latest_payment = db.query(func.max(Payment.received_at)).scalar()
-    last_sync = db.query(EventLog).filter(EventLog.event_type == "payment_app.sync").order_by(EventLog.created_at.desc()).first()
+    scope = account_user_ids(db, user)
+    payment_count = db.query(Payment).filter(Payment.user_id.in_(scope)).count()
+    latest_payment = db.query(func.max(Payment.received_at)).filter(Payment.user_id.in_(scope)).scalar()
+    last_sync = db.query(EventLog).filter(EventLog.user_id.in_(scope), EventLog.event_type == "payment_app.sync").order_by(EventLog.created_at.desc()).first()
     provider = provider_status()
     return {
         "provider": provider["provider"],
@@ -85,7 +91,7 @@ def status(db: Session = Depends(get_db), user: User = Depends(current_user)):
         "sync_health": "healthy" if payment_count else "needs_data",
         "last_payment_at": latest_payment.isoformat() if latest_payment else None,
         "last_sync_at": last_sync.created_at.isoformat() if last_sync else None,
-        "webhook_events": db.query(EventLog).count(),
+        "webhook_events": db.query(EventLog).filter(EventLog.user_id.in_(scope)).count(),
         "mapped_payments": payment_count,
         "saved_methods": db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).count(),
     }
@@ -176,8 +182,8 @@ def remove_payment_method(method_id: int, db: Session = Depends(get_db), user: U
 
 
 @router.post("/connect", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
-def connect(payload: PaymentAppConnectIn, background: BackgroundTasks, db: Session = Depends(get_db)):
-    event = enqueue_event(db, "payment_app.connected", payload.model_dump())
+def connect(payload: PaymentAppConnectIn, background: BackgroundTasks, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    event = enqueue_event(db, "payment_app.connected", payload.model_dump(), user_id=user.id)
     background.add_task(process_event_background, event.id)
     return {
         "status": "connected",
@@ -189,16 +195,18 @@ def connect(payload: PaymentAppConnectIn, background: BackgroundTasks, db: Sessi
 
 
 @router.post("/sync-demo", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
-def sync_demo(background: BackgroundTasks, db: Session = Depends(get_db)):
-    customer = db.query(Customer).filter(Customer.name == "Northstar Robotics").first()
+def sync_demo(background: BackgroundTasks, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    scope = account_user_ids(db, user)
+    customer = db.query(Customer).filter(Customer.user_id.in_(scope), Customer.name == "Northstar Robotics").first()
     if not customer:
-        customer = Customer(name="Northstar Robotics", country="US", currency="USD", risk_rating="Low", kyc_status="Verified")
+        customer = Customer(user_id=user.id, name="Northstar Robotics", country="US", currency="USD", risk_rating="Low", kyc_status="Verified")
         db.add(customer)
         db.flush()
 
     external_ref = f"stripe_pi_{datetime.utcnow().strftime('%Y%m%d%H%M%S')}"
     payment = Payment(
         customer_id=customer.id,
+        user_id=user.id,
         amount=18420.75,
         currency=customer.currency,
         country=customer.country,
@@ -208,20 +216,20 @@ def sync_demo(background: BackgroundTasks, db: Session = Depends(get_db)):
     )
     db.add(payment)
     db.flush()
-    db.add(Transaction(payment_id=payment.id, type="inbound", amount=payment.amount, currency=payment.currency, country=payment.country, counterparty=customer.name, risk_score=28))
-    event = enqueue_event(db, "payment_app.sync", {"provider": "Stripe", "payment_id": payment.id, "external_ref": external_ref})
+    db.add(Transaction(user_id=user.id, payment_id=payment.id, type="inbound", amount=payment.amount, currency=payment.currency, country=payment.country, counterparty=customer.name, risk_score=28))
+    event = enqueue_event(db, "payment_app.sync", {"provider": "Stripe", "payment_id": payment.id, "external_ref": external_ref}, user_id=user.id)
     background.add_task(process_event_background, event.id)
     return {"status": "synced", "imported_payments": 1, "payment_id": payment.id, "external_ref": external_ref, "event_id": event.id}
 
 
 @router.post("/payment-link", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
-async def payment_link(payload: PaymentLinkIn, db: Session = Depends(get_db)):
-    invoice = db.get(Invoice, payload.invoice_id)
+async def payment_link(payload: PaymentLinkIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    invoice = db.query(Invoice).filter(Invoice.id == payload.invoice_id, Invoice.user_id.in_(account_user_ids(db, user))).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
     customer = db.get(Customer, invoice.customer_id)
-    checkout = await create_checkout_link(invoice, customer, payload.customer_email, payload.success_url)
-    event = enqueue_event(db, "payment_link.created", {"invoice_id": invoice.id, "provider": checkout.provider, "checkout_id": checkout.checkout_id})
+    checkout = await create_checkout_link(invoice, customer, user, payload.customer_email, payload.success_url)
+    event = enqueue_event(db, "payment_link.created", {"invoice_id": invoice.id, "provider": checkout.provider, "checkout_id": checkout.checkout_id}, user_id=user.id)
     return {
         "status": "created",
         "provider": checkout.provider,
@@ -247,18 +255,18 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: Sess
     metadata = session.get("metadata") or {}
     invoice_id = int(metadata["invoice_id"]) if metadata.get("invoice_id") else None
     invoice, payment, _customer = record_completed_checkout(db, session, invoice_id)
-    stored = enqueue_event(db, "stripe.checkout.completed", {"stripe_event_id": event.get("id"), "invoice_id": invoice.id if invoice else invoice_id, "external_ref": payment.external_ref})
+    stored = enqueue_event(db, "stripe.checkout.completed", {"stripe_event_id": event.get("id"), "invoice_id": invoice.id if invoice else invoice_id, "external_ref": payment.external_ref}, user_id=payment.user_id)
     background.add_task(process_event_background, stored.id)
     return {"status": "processed", "event_id": stored.id}
 
 
 @router.post("/verify-checkout/{checkout_id}", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
-async def verify_checkout(checkout_id: str, db: Session = Depends(get_db)):
+async def verify_checkout(checkout_id: str, db: Session = Depends(get_db), user: User = Depends(current_user)):
     session = await retrieve_checkout_session(checkout_id)
     metadata = session.get("metadata") or {}
     invoice_id = int(metadata["invoice_id"]) if metadata.get("invoice_id") else None
     if not invoice_id:
-        events = db.query(EventLog).filter(EventLog.event_type == "payment_link.created").order_by(EventLog.created_at.desc()).limit(50).all()
+        events = db.query(EventLog).filter(EventLog.user_id.in_(account_user_ids(db, user)), EventLog.event_type == "payment_link.created").order_by(EventLog.created_at.desc()).limit(50).all()
         event = next((item for item in events if item.payload.get("checkout_id") == checkout_id), None)
         invoice_id = event.payload.get("invoice_id") if event else None
     if session.get("payment_status") != "paid":
@@ -268,8 +276,8 @@ async def verify_checkout(checkout_id: str, db: Session = Depends(get_db)):
             "payment_status": session.get("payment_status", "unknown"),
             "message": "Stripe has not marked this checkout session as paid yet.",
         }
-    invoice, payment, customer = record_completed_checkout(db, session, invoice_id)
-    stored = enqueue_event(db, "stripe.checkout.manually_verified", {"checkout_id": checkout_id, "invoice_id": invoice.id if invoice else invoice_id, "external_ref": payment.external_ref})
+    invoice, payment, customer = record_completed_checkout(db, session, invoice_id, user_id=user.id)
+    stored = enqueue_event(db, "stripe.checkout.manually_verified", {"checkout_id": checkout_id, "invoice_id": invoice.id if invoice else invoice_id, "external_ref": payment.external_ref}, user_id=user.id)
     return {
         "status": "verified",
         "checkout_id": checkout_id,
@@ -290,9 +298,9 @@ async def pay(payload: WalletTransferIn, background: BackgroundTasks, db: Sessio
         method = db.query(PaymentMethod).filter(PaymentMethod.id == payload.payment_method_id, PaymentMethod.user_id == user.id).first()
         if not method:
             raise HTTPException(status_code=404, detail="Payment method not found")
-    customer = db.query(Customer).filter(Customer.name == payload.recipient_name).first()
+    customer = db.query(Customer).filter(Customer.user_id.in_(account_user_ids(db, user)), Customer.name == payload.recipient_name).first()
     if not customer:
-        customer = Customer(name=payload.recipient_name, country="US", currency=payload.currency, risk_rating="Medium", kyc_status="Review")
+        customer = Customer(user_id=user.id, name=payload.recipient_name, country="US", currency=payload.currency, risk_rating="Medium", kyc_status="Review")
         db.add(customer)
         db.flush()
     card_charge = await charge_saved_card(method.provider_token if method else None, payload.amount, payload.currency, f"Payment to {payload.recipient_name}")
@@ -300,6 +308,7 @@ async def pay(payload: WalletTransferIn, background: BackgroundTasks, db: Sessio
     payment_rail = f"{method.brand} ending {method.last_four}" if method else payload.rail
     payment = Payment(
         customer_id=customer.id,
+        user_id=user.id,
         amount=payload.amount,
         currency=payload.currency,
         country=customer.country,
@@ -309,15 +318,15 @@ async def pay(payload: WalletTransferIn, background: BackgroundTasks, db: Sessio
     )
     db.add(payment)
     db.flush()
-    db.add(Transaction(payment_id=payment.id, type="outbound", amount=payload.amount, currency=payload.currency, country=customer.country, counterparty=payload.recipient_name, risk_score=22))
-    event = enqueue_event(db, "wallet.payment.sent", payload.model_dump() | {"payment_id": payment.id, "external_ref": external_ref, "funding_source": payment_rail})
+    db.add(Transaction(user_id=user.id, payment_id=payment.id, type="outbound", amount=payload.amount, currency=payload.currency, country=customer.country, counterparty=payload.recipient_name, risk_score=22))
+    event = enqueue_event(db, "wallet.payment.sent", payload.model_dump() | {"payment_id": payment.id, "external_ref": external_ref, "funding_source": payment_rail}, user_id=user.id)
     background.add_task(process_event_background, event.id)
     return {"status": payment.status, "payment_id": payment.id, "external_ref": external_ref, "recipient": payload.recipient_name, "amount": payload.amount, "currency": payload.currency, "funding_source": payment_rail}
 
 
 @router.post("/request", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
-def request_money(payload: WalletRequestIn, background: BackgroundTasks, db: Session = Depends(get_db)):
+def request_money(payload: WalletRequestIn, background: BackgroundTasks, db: Session = Depends(get_db), user: User = Depends(current_user)):
     request_id = f"wallet_req_{int(datetime.utcnow().timestamp())}"
-    event = enqueue_event(db, "wallet.payment.requested", payload.model_dump() | {"request_id": request_id})
+    event = enqueue_event(db, "wallet.payment.requested", payload.model_dump() | {"request_id": request_id}, user_id=user.id)
     background.add_task(process_event_background, event.id)
     return {"status": "requested", "request_id": request_id, "payer": payload.payer_name, "amount": payload.amount, "currency": payload.currency}

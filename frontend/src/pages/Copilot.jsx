@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, Edit3, MessageSquare, Plus, Send, Sparkles } from "lucide-react";
+import { Check, Edit3, MessageSquare, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../lib/api.js";
 
 const STORAGE_KEY = "ig_copilot_sessions";
@@ -65,6 +65,28 @@ export default function Copilot() {
     setDraftTitle("");
   }
 
+  function deleteSession(id) {
+    setSessions((prev) => {
+      const remaining = prev.filter((session) => session.id !== id);
+      if (!remaining.length) {
+        const replacement = makeSession();
+        setActiveId(replacement.id);
+        setQuestion("");
+        setEditingId("");
+        return [replacement];
+      }
+      if (id === activeSession?.id) {
+        setActiveId(remaining[0].id);
+        setQuestion("");
+      }
+      if (id === editingId) {
+        setEditingId("");
+        setDraftTitle("");
+      }
+      return remaining;
+    });
+  }
+
   async function ask(e) {
     e.preventDefault();
     const q = question.trim();
@@ -124,8 +146,13 @@ export default function Copilot() {
                       <div className="truncate text-sm font-medium">{session.title}</div>
                       <div className="text-xs text-steel">{session.messages.length} messages</div>
                     </div>
-                    <span onClick={(e) => { e.stopPropagation(); startRename(session); }} className="grid h-7 w-7 place-items-center rounded text-steel opacity-100 hover:bg-panel lg:opacity-0 lg:group-hover:opacity-100" role="button" title="Rename chat">
-                      <Edit3 size={14} />
+                    <span className="flex shrink-0 items-center gap-1 opacity-100 lg:opacity-0 lg:group-hover:opacity-100 lg:group-focus-within:opacity-100">
+                      <span onClick={(e) => { e.stopPropagation(); startRename(session); }} className="grid h-7 w-7 place-items-center rounded text-steel hover:bg-panel" role="button" title="Rename chat">
+                        <Edit3 size={14} />
+                      </span>
+                      <span onClick={(e) => { e.stopPropagation(); deleteSession(session.id); }} className="grid h-7 w-7 place-items-center rounded text-steel hover:bg-coral/10 hover:text-coral" role="button" title="Delete chat">
+                        <Trash2 size={14} />
+                      </span>
                     </span>
                   </button>
                 )}

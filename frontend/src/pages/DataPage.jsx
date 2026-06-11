@@ -2,42 +2,48 @@ import { useEffect, useState } from "react";
 import { Download } from "lucide-react";
 import { Card, Skeleton } from "../components/Card.jsx";
 import { api } from "../lib/api.js";
+import { accountStorageKey, readStoredUser } from "../lib/account.js";
 import { downloadCsv, downloadJson } from "../lib/downloads.js";
 
 const pageCache = {};
 const pageRequests = {};
 
 export function prefetchDataPage(type) {
-  if (pageCache[type]) return Promise.resolve(pageCache[type]);
-  if (!pageRequests[type]) {
-    pageRequests[type] = api(`/api/${type}`)
+  const key = `${accountStorageKey()}:${type}`;
+  if (pageCache[key]) return Promise.resolve(pageCache[key]);
+  if (!pageRequests[key]) {
+    pageRequests[key] = api(`/api/${type}`)
       .then((result) => {
-        pageCache[type] = result;
+        pageCache[key] = result;
         return result;
       })
       .finally(() => {
-        delete pageRequests[type];
+        delete pageRequests[key];
       });
   }
-  return pageRequests[type];
+  return pageRequests[key];
 }
 
 export default function DataPage({ type }) {
-  const [rows, setRows] = useState(pageCache[type] || null);
+  const user = readStoredUser();
+  const cacheKey = `${accountStorageKey()}:${type}`;
+  const [rows, setRows] = useState(pageCache[cacheKey] || null);
   const [error, setError] = useState("");
   useEffect(() => {
-    setRows(pageCache[type] || null);
+    const key = `${accountStorageKey()}:${type}`;
+    setRows(pageCache[key] || null);
     setError("");
     prefetchDataPage(type).then((result) => {
       setRows(result);
     }).catch((err) => {
-      if (!pageCache[type]) setError(err.message);
+      if (!pageCache[key]) setError(err.message);
     });
-  }, [type]);
+  }, [type, cacheKey]);
   if (error) return <Card title={`${type.toUpperCase()} unavailable`} helper={error} />;
   if (!rows) return <Skeleton />;
   const preferred = type === "payments" ? ["id", "recipient", "amount", "currency", "status", "rail", "country", "external_ref"] : [];
-  const available = Object.keys(rows[0] || {}).filter((k) => !["hashed_password", "metadata_json"].includes(k));
+  const restrictedByRole = user.role === "Viewer" ? new Set(["external_ref", "invoice_id", "customer_id", "metadata_json", "user_id"]) : new Set(["metadata_json", "user_id"]);
+  const available = Object.keys(rows[0] || {}).filter((k) => !["hashed_password"].includes(k) && !restrictedByRole.has(k));
   const columns = [...preferred.filter((key) => available.includes(key)), ...available.filter((key) => !preferred.includes(key))].slice(0, 8);
   const title = type.replace("-", " ").toUpperCase();
   return (

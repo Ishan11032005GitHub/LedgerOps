@@ -2,41 +2,50 @@ import { useEffect, useRef, useState } from "react";
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Download } from "lucide-react";
 import { Card, Skeleton } from "../components/Card.jsx";
+import { accountStorageKey, readStoredUser, workspaceName } from "../lib/account.js";
 import { api } from "../lib/api.js";
 import { downloadCsv, downloadJson, downloadSvg } from "../lib/downloads.js";
 
 const money = (n) => new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n || 0);
-let dashboardCache = null;
-let dashboardRequest = null;
+const dashboardCache = {};
+const dashboardRequest = {};
 
 export function prefetchDashboard() {
-  if (dashboardCache) return Promise.resolve(dashboardCache);
-  if (!dashboardRequest) {
-    dashboardRequest = api("/api/dashboard")
+  const key = accountStorageKey();
+  if (dashboardCache[key]) return Promise.resolve(dashboardCache[key]);
+  if (!dashboardRequest[key]) {
+    dashboardRequest[key] = api("/api/dashboard")
       .then((result) => {
-        dashboardCache = result;
+        dashboardCache[key] = result;
         return result;
       })
       .finally(() => {
-        dashboardRequest = null;
+        delete dashboardRequest[key];
       });
   }
-  return dashboardRequest;
+  return dashboardRequest[key];
 }
 
 export default function Dashboard() {
-  const [data, setData] = useState(dashboardCache);
+  const cacheKey = accountStorageKey();
+  const [data, setData] = useState(dashboardCache[cacheKey]);
   const [error, setError] = useState("");
   useEffect(() => {
+    const key = accountStorageKey();
+    setData(dashboardCache[key] || null);
+    setError("");
     prefetchDashboard().then((result) => {
       setData(result);
     }).catch((err) => {
-      if (!dashboardCache) setError(err.message);
+      if (!dashboardCache[key]) setError(err.message);
     });
-  }, []);
+  }, [cacheKey]);
   if (error) return <Card title="Dashboard unavailable" helper={error}><div className="mt-4 text-sm text-steel">Sign out and sign back in if your session token is stale.</div></Card>;
   if (!data) return <div className="grid gap-4 md:grid-cols-3"><Skeleton /><Skeleton /><Skeleton /></div>;
   const exposure = Object.entries(data.currency_exposure).map(([currency, amount]) => ({ currency, amount }));
+  const account = readStoredUser();
+  const workspace = workspaceName(account);
+  const accountLabel = account.name || "this account";
   const riskLabel = data.risk_score >= 70 ? "Elevated review" : data.risk_score >= 45 ? "Watchlist" : "Controlled";
   const stats = [
     { metric: "total_transaction_volume", value: data.total_volume, unit: "USD" },
@@ -49,9 +58,9 @@ export default function Dashboard() {
     <div className="space-y-6">
       <div className="flex flex-col justify-between gap-3 rounded-lg border border-slate-200 bg-white p-5 shadow-soft md:flex-row md:items-center">
         <div>
-          <div className="text-sm font-medium text-mint">Infinity Payments Intelligence</div>
-          <h2 className="mt-1 text-2xl font-semibold">Operating snapshot</h2>
-          <p className="mt-1 text-sm text-steel">Live finance posture across payment intake, receivables, currency exposure, and anomaly signals.</p>
+          <div className="text-sm font-medium text-mint">{workspace}</div>
+          <h2 className="mt-1 text-2xl font-semibold">{accountLabel}'s operating snapshot</h2>
+          <p className="mt-1 text-sm text-steel">Account-specific posture for {account.email || workspace} across payments, receivables, currency exposure, and anomaly signals.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={() => downloadCsv("dashboard_stats.csv", stats, ["metric", "value", "unit"])} className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium hover:bg-panel"><Download size={15} /> Stats CSV</button>

@@ -16,6 +16,8 @@ class User(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(120))
+    account_type: Mapped[str] = mapped_column(String(30), default="company")
+    workspace_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[Role] = mapped_column(SqlEnum(Role), default=Role.viewer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -61,6 +63,7 @@ class PaymentMethod(Base):
 class Customer(Base):
     __tablename__ = "customers"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(160), index=True)
     country: Mapped[str] = mapped_column(String(80))
     currency: Mapped[str] = mapped_column(String(8))
@@ -74,6 +77,7 @@ class Customer(Base):
 class Invoice(Base):
     __tablename__ = "invoices"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     invoice_number: Mapped[str] = mapped_column(String(40), unique=True, index=True)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"))
     amount: Mapped[float] = mapped_column(Float)
@@ -90,6 +94,7 @@ class Invoice(Base):
 class Payment(Base):
     __tablename__ = "payments"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     invoice_id: Mapped[int | None] = mapped_column(ForeignKey("invoices.id"), nullable=True)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"))
     amount: Mapped[float] = mapped_column(Float)
@@ -104,6 +109,7 @@ class Payment(Base):
 class Transaction(Base):
     __tablename__ = "transactions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     payment_id: Mapped[int | None] = mapped_column(ForeignKey("payments.id"), nullable=True)
     type: Mapped[str] = mapped_column(String(30))
     amount: Mapped[float] = mapped_column(Float)
@@ -127,6 +133,7 @@ class FXRate(Base):
 class Alert(Base):
     __tablename__ = "alerts"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     severity: Mapped[str] = mapped_column(String(20))
     category: Mapped[str] = mapped_column(String(60))
     message: Mapped[str] = mapped_column(Text)
@@ -139,6 +146,7 @@ class Alert(Base):
 class Prediction(Base):
     __tablename__ = "predictions"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     prediction_type: Mapped[str] = mapped_column(String(40), index=True)
     entity_type: Mapped[str] = mapped_column(String(40))
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -150,6 +158,7 @@ class Prediction(Base):
 class ComplianceCheck(Base):
     __tablename__ = "compliance_checks"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     entity_type: Mapped[str] = mapped_column(String(40))
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score: Mapped[float] = mapped_column(Float)
@@ -161,6 +170,7 @@ class ComplianceCheck(Base):
 class EventLog(Base):
     __tablename__ = "event_logs"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(30), default="queued")

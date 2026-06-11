@@ -28,7 +28,7 @@ def provider_status() -> dict:
     }
 
 
-async def create_checkout_link(invoice: Invoice, customer: Customer | None, customer_email: str | None = None, success_url: str | None = None) -> CheckoutLink:
+async def create_checkout_link(invoice: Invoice, customer: Customer | None, user: User, customer_email: str | None = None, success_url: str | None = None) -> CheckoutLink:
     settings = get_settings()
     if not settings.stripe_secret_key:
         checkout_id = f"ig_chk_{invoice.id}_{int(time.time())}"
@@ -51,6 +51,7 @@ async def create_checkout_link(invoice: Invoice, customer: Customer | None, cust
         "client_reference_id": invoice.invoice_number,
         "metadata[invoice_id]": str(invoice.id),
         "metadata[invoice_number]": invoice.invoice_number,
+        "metadata[infinityguard_user_id]": str(user.id),
         "line_items[0][quantity]": "1",
         "line_items[0][price_data][currency]": currency,
         "line_items[0][price_data][unit_amount]": str(amount_minor),
