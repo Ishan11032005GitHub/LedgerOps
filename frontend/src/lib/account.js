@@ -23,7 +23,7 @@ export function workspaceName(user = readStoredUser()) {
 
   const domain = String(user.email || "").split("@")[1] || "";
   const root = domain.split(".")[0] || "account";
-  if (root.toLowerCase() === "infinityguard") return "InfinityGuard workspace";
+  if (root.toLowerCase() === "ledgerops") return "LedgerOps workspace";
   return `${titleCase(root)} workspace`;
 }
 
@@ -47,5 +47,5 @@ export function accountStorageKey(user = readStoredUser()) {
 }
 
 export function isSeededDemoAccount(user = readStoredUser()) {
-  return accountStorageKey(user) === "admin@infinityguard.ai";
+  return accountStorageKey(user) === "admin@ledgerops.ai";
 }

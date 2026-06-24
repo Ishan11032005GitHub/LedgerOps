@@ -7,7 +7,7 @@ export default function PasswordRecovery({ mode = "request", insideAccount = fal
   const isReset = mode === "reset";
   const navigate = useNavigate();
   const token = useMemo(() => new URLSearchParams(window.location.search).get("token") || "", []);
-  const [email, setEmail] = useState("admin@infinityguard.ai");
+  const [email, setEmail] = useState("admin@ledgerops.ai");
   const [password, setPassword] = useState("");
   const [confirmation, setConfirmation] = useState("");
   const [result, setResult] = useState(null);
@@ -47,7 +47,7 @@ export default function PasswordRecovery({ mode = "request", insideAccount = fal
           <div className="grid h-11 w-11 place-items-center rounded-md bg-mint/10 text-mint">{isReset ? <KeyRound /> : <ShieldCheck />}</div>
           <div>
             <h1 className="text-2xl font-semibold">{isReset ? "Set a new password" : "Recover your account"}</h1>
-            <p className="text-sm text-steel">{isReset ? "Choose a new password for your InfinityGuard account." : "Enter your email to receive a password reset link."}</p>
+            <p className="text-sm text-steel">{isReset ? "Choose a new password for your LedgerOps account." : "Enter your email to receive a password reset link."}</p>
           </div>
         </div>
 

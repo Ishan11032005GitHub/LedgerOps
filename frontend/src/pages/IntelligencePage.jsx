@@ -9,7 +9,6 @@ const modes = {
     label: "Currency exposure",
     icon: Landmark,
     endpoint: "/api/predict/fx",
-    body: { payload: { currency: "EUR" } },
     summary: "Live currency posture across open invoices, recent rate movement, and conversion timing.",
   },
   fraud: {
@@ -17,7 +16,6 @@ const modes = {
     label: "Payment anomaly",
     icon: ShieldAlert,
     endpoint: "/api/predict/anomaly",
-    body: { payload: { amount: 82000, country: "ZA", currency: "ZAR", hour: 2, first_time_payer: true } },
     summary: "Continuous review of unusual payment amount, payer, country, and settlement patterns.",
   },
   cash: {
@@ -25,15 +23,13 @@ const modes = {
     label: "Runway forecast",
     icon: Activity,
     endpoint: "/api/predict/runway",
-    body: { payload: {} },
     summary: "Runway view based on recent payments, open receivables, payroll, and operating burn.",
   },
   compliance: {
     title: "Compliance Engine",
     label: "Compliance review",
     icon: Brain,
-    endpoint: "/api/compliance/check",
-    body: { amount: 76000, country: "AE", payer_name: "Kairo Retail Group", invoice_amount: 73000, documents: ["invoice"] },
+    endpoint: "/api/compliance/current",
     summary: "Payment review for KYC, document completeness, amount match, and escalation needs.",
   },
 };
@@ -50,7 +46,7 @@ export default function IntelligencePage({ mode }) {
     setLoading(true);
     setError("");
     try {
-      const response = await api(config.endpoint, { method: "POST", body: JSON.stringify(config.body) });
+      const response = await api(config.endpoint, { method: "POST", body: JSON.stringify({}) });
       insightCache[mode] = response;
       setResult(response);
     } catch (err) {
@@ -79,7 +75,7 @@ export default function IntelligencePage({ mode }) {
             </div>
           </div>
           <div className="rounded-md border border-slate-200 bg-panel px-4 py-3 text-sm text-steel">
-            {loading ? "Refreshing insight..." : error ? "Insight unavailable" : "Updated from current finance data"}
+            {loading ? "Refreshing insight..." : error ? "Insight unavailable" : result?.data_status === "insufficient" ? "Waiting for account activity" : "Updated from current account data"}
           </div>
         </div>
       </Card>
@@ -87,6 +83,23 @@ export default function IntelligencePage({ mode }) {
       {error ? (
         <Card title="Insight Unavailable">
           <div className="mt-4 rounded-md bg-coral/10 p-4 text-sm text-coral">{error}</div>
+        </Card>
+      ) : result?.data_status === "insufficient" ? (
+        <Card title="More Account Data Needed">
+          <div className="mt-4 rounded-md border border-slate-200 bg-panel p-5">
+            <p className="text-sm leading-6 text-steel">{result.reason}</p>
+            <div className="mt-4">
+              <div className="text-sm font-semibold">Required before analysis</div>
+              <div className="mt-2 space-y-2">
+                {(result.required || []).map((item) => (
+                  <div key={item} className="flex gap-2 text-sm text-steel">
+                    <CheckCircle2 size={15} className="mt-0.5 shrink-0 text-mint" />
+                    <span>{item}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
         </Card>
       ) : (
         <Card title={!view ? "Loading Insight" : "Decision Summary"}>
@@ -135,7 +148,7 @@ function buildView(mode, result) {
       recommendation: result.recommendation || "Stage conversion and review the position within 48 hours.",
       signals: [
         `Trend is ${result.trend || "under review"}.`,
-        `Selected currency exposure is being evaluated against recent rate movement.`,
+        `${result.source?.currency || "Selected currency"} exposure of ${formatAmount(result.source?.exposure)} is being evaluated against ${result.source?.rate_observations || 0} recent rate observations.`,
         result.note || "Recommendation is for operational planning only.",
       ],
       actions: ["Review open invoices in volatile currencies.", "Avoid converting the full balance in one step.", "Re-run analysis after major rate movement."],
@@ -152,7 +165,11 @@ function buildView(mode, result) {
       tone: toneFromRisk(risk),
       confidence: "Model-assisted",
       recommendation: anomaly >= 70 ? "Hold for manual verification before settlement." : "Continue monitoring and verify supporting details if needed.",
-      signals: result.reasons || ["No unusual payment signals were returned."],
+      signals: [
+        ...(result.reasons || ["No unusual payment signals were returned."]),
+        result.source?.counterparty ? `Highest-scoring transaction was with ${result.source.counterparty}.` : null,
+        result.source?.transactions_analyzed ? `${result.source.transactions_analyzed} recent account transactions were analyzed; the average score was ${result.average_score}/100.` : null,
+      ].filter(Boolean),
       actions: ["Verify payer identity.", "Compare amount against invoice tolerance.", "Escalate if timing, country, or payer history looks unusual."],
     };
   }
@@ -167,7 +184,11 @@ function buildView(mode, result) {
       tone: toneFromRisk(risk),
       confidence: "Forecast",
       recommendation: days < 60 ? "Accelerate high-value receivables and pause discretionary spend." : "Runway is acceptable; continue monitoring invoice delays.",
-      signals: [`Forecast method: ${result.method || "cash-flow model"}.`, "Open invoices and recent payments are included.", "Payroll and operating expenses are included."],
+      signals: [
+        `Forecast method: ${result.method || "cash-flow model"}.`,
+        `${result.source?.incoming_transactions || 0} incoming and ${result.source?.outgoing_transactions || 0} outgoing transactions were included.`,
+        `${result.source?.pending_invoices || 0} pending invoices were included.`,
+      ],
       actions: ["Follow up on overdue invoices.", "Review large upcoming expenses.", "Re-run after the next payment sync."],
     };
   }
@@ -180,13 +201,21 @@ function buildView(mode, result) {
     tone: toneFromRisk(complianceRisk),
     confidence: "Rule-assisted",
     recommendation: result.status === "pass" ? "No material compliance gaps detected." : "Resolve required review items before final settlement.",
-    signals: result.recommendations || ["No material compliance gaps detected."],
+    signals: [
+      ...(result.recommendations || ["No material compliance gaps detected."]),
+      result.source?.counterparty ? `Reviewed the account transaction with ${result.source.counterparty}.` : null,
+    ].filter(Boolean),
     actions: ["Attach missing compliance documents.", "Confirm payer identity and invoice match.", "Escalate blocked or high-risk items."],
   };
 }
 
 function score(value, fallback) {
   return value ?? fallback;
+}
+
+function formatAmount(value) {
+  if (value == null) return "from this account";
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(value);
 }
 
 function toneFromRisk(risk) {

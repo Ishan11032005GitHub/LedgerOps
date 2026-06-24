@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Bot, CircleDollarSign, Gauge, LineChart, LogOut, PlugZap, Receipt, SearchCheck, Settings, ShieldAlert, Users, WalletCards } from "lucide-react";
+import { CircleDollarSign, Gauge, LineChart, LogOut, PlugZap, Receipt, SearchCheck, Settings, ShieldAlert, Users, WalletCards } from "lucide-react";
 import { accountCommandTitle, accountSubtitle, readStoredUser } from "../lib/account.js";
+import FloatingCopilot from "./FloatingCopilot.jsx";
 import { prefetchDashboard } from "../pages/Dashboard.jsx";
 import { prefetchDataPage } from "../pages/DataPage.jsx";
 
@@ -16,7 +17,6 @@ const nav = [
   ["Fraud Detection", "/fraud", ShieldAlert],
   ["Cash Forecast", "/cash", WalletCards],
   ["Compliance", "/compliance", SearchCheck],
-  ["AI Copilot", "/copilot", Bot],
   ["Settings", "/settings", Settings],
 ];
 
@@ -45,7 +45,7 @@ export default function Layout() {
     <div className="min-h-screen lg:grid lg:grid-cols-[280px_1fr]">
       <aside className="bg-ink text-white p-5 lg:min-h-screen">
         <div className="mb-8">
-          <div className="text-2xl font-semibold">InfinityGuard AI</div>
+          <div className="text-2xl font-semibold">LedgerOps</div>
           <div className="text-sm text-white/60 mt-1">Payments risk operating system</div>
         </div>
         <nav className="grid gap-1">
@@ -90,6 +90,7 @@ export default function Layout() {
             <Outlet />
           </motion.div>
         </AnimatePresence>
+        <FloatingCopilot />
       </main>
     </div>
   );

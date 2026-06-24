@@ -60,6 +60,30 @@ class PaymentMethod(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class DemoWallet(Base):
+    __tablename__ = "demo_wallets"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), unique=True, index=True)
+    balance_minor: Mapped[int] = mapped_column(Integer, default=0)
+    currency: Mapped[str] = mapped_column(String(8), default="INR")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class DemoMessage(Base):
+    __tablename__ = "demo_messages"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    recipient_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(24), default="text")
+    text: Mapped[str] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(String(240), nullable=True)
+    amount_minor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    currency: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    status: Mapped[str] = mapped_column(String(24), default="sent")
+    read_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class Customer(Base):
     __tablename__ = "customers"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

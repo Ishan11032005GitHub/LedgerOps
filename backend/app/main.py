@@ -7,7 +7,7 @@ from .seed import seed
 
 
 settings = get_settings()
-app = FastAPI(title="InfinityGuard AI API", version="1.0.0")
+app = FastAPI(title="LedgerOps API", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,

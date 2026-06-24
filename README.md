@@ -1,8 +1,8 @@
-# InfinityGuard AI
+# LedgerOps
 
 AI finance operations layer for cross-border SMB payments.
 
-InfinityGuard AI is a production-style full-stack fintech project: a standalone finance intelligence system with mock APIs, webhooks, fraud detection, FX recommendations, cash forecasting, compliance scoring, and a state-aware AI finance copilot.
+LedgerOps is a full-stack finance operations system with Stripe Checkout collection, signed webhooks, fraud detection, FX recommendations, cash forecasting, compliance scoring, and a state-aware AI finance copilot.
 
 ## Stack
 
@@ -21,15 +21,39 @@ docker compose up --build
 
 Open:
 
-- Frontend: `http://localhost:8080`
+- Frontend: `http://localhost:8081`
 - Backend API docs: `http://localhost:8000/docs`
-- ML health: `http://localhost:9000/health`
+- ML health is available inside the Docker network.
+
+## Two-account Demo
+
+Docker starts LedgerOps in demo-only mode. Real Stripe operations are disabled even when Stripe keys exist in the shell.
+
+- `asha.demo@ledgerops.ai` / `DemoPass123` - INR 25,000
+- `rohan.demo@ledgerops.ai` / `DemoPass123` - INR 18,000
+
+Use the one-click demo account buttons on the sign-in page. Open the second account in an incognito window or another browser. Payments update both balances and both payment histories; messages and payment requests appear in the floating Pay chat. Use **Reset demo** on the Payment App page to restore the initial state.
+
+## Real Payments
+
+Real-money collection is fail-closed. LedgerOps only reports live payments as enabled when both a Stripe live secret key and webhook signing secret are configured.
+
+```powershell
+$env:STRIPE_SECRET_KEY="sk_live_..."
+$env:STRIPE_WEBHOOK_SECRET="whsec_..."
+$env:PAYMENT_PROVIDER_MODE="disabled"
+docker compose up --build
+```
+
+Configure the Stripe webhook endpoint as `https://<your-api-domain>/api/payment-app/stripe-webhook` and subscribe to `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Do not place live keys in source control. A public HTTPS deployment, activated Stripe account, business verification, production database, secret manager, and operational monitoring are required before launch.
+
+Invoice checkout supports real inbound collection. General recipient payouts are intentionally blocked in live mode until connected recipient onboarding and payout compliance are implemented.
 
 Seed users:
 
-- `admin@infinityguard.ai` / `AdminPass123`
-- `finance@infinityguard.ai` / `FinancePass123`
-- `viewer@infinityguard.ai` / `ViewerPass123`
+- `admin@ledgerops.ai` / `AdminPass123`
+- `finance@ledgerops.ai` / `FinancePass123`
+- `viewer@ledgerops.ai` / `ViewerPass123`
 
 ## Local Development
 

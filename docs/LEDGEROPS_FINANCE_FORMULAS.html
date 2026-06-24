@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>LedgerOps Finance Calculation Notes</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 18mm 16mm 18mm;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      color: #17212b;
+      background: #ffffff;
+      font-family: "Segoe UI", Arial, sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.45;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: 26pt; line-height: 1.08; margin-bottom: 12px; }
+    h2 {
+      margin: 26px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 2px solid #00a878;
+      font-size: 17pt;
+      page-break-after: avoid;
+    }
+    h3 { margin: 18px 0 8px; font-size: 12.5pt; page-break-after: avoid; }
+
+    .cover {
+      min-height: 245mm;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      page-break-after: always;
+    }
+
+    .brand {
+      color: #008e68;
+      font-size: 12pt;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .subtitle {
+      max-width: 560px;
+      margin-bottom: 32px;
+      color: #516173;
+      font-size: 15pt;
+    }
+
+    .cover-card {
+      max-width: 560px;
+      padding: 20px;
+      border: 1px solid #d7e0e8;
+      border-left: 5px solid #00a878;
+      background: #f6f9fb;
+    }
+
+    .meta {
+      margin-top: 36px;
+      color: #657486;
+      font-size: 9.5pt;
+    }
+
+    .formula-card, .note, .warning, .example {
+      margin: 10px 0 14px;
+      padding: 12px 14px;
+      border-radius: 4px;
+      page-break-inside: avoid;
+    }
+
+    .formula-card {
+      border: 1px solid #cbd8e3;
+      background: #f7fafc;
+    }
+
+    .formula {
+      margin: 7px 0;
+      color: #0b3f35;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 9.5pt;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .note {
+      border-left: 4px solid #00a878;
+      background: #edf9f5;
+    }
+
+    .warning {
+      border-left: 4px solid #e59a00;
+      background: #fff8e7;
+    }
+
+    .example {
+      border-left: 4px solid #5277d5;
+      background: #f1f5ff;
+    }
+
+    table {
+      width: 100%;
+      margin: 10px 0 16px;
+      border-collapse: collapse;
+      page-break-inside: avoid;
+    }
+
+    th, td {
+      padding: 8px;
+      border: 1px solid #d8e1e8;
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th {
+      color: #263b4a;
+      background: #eef3f6;
+      font-weight: 700;
+    }
+
+    ul, ol { margin: 6px 0 12px; padding-left: 22px; }
+    li { margin: 4px 0; }
+    code {
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: #edf1f4;
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 9pt;
+    }
+
+    .tag {
+      display: inline-block;
+      margin: 0 4px 4px 0;
+      padding: 3px 7px;
+      border: 1px solid #cbd8e3;
+      border-radius: 12px;
+      color: #405366;
+      background: #ffffff;
+      font-size: 8.5pt;
+    }
+
+    .page-break { page-break-before: always; }
+    .avoid-break { page-break-inside: avoid; }
+    .muted { color: #657486; }
+    .small { font-size: 9pt; }
+
+    .footer-note {
+      margin-top: 28px;
+      padding-top: 10px;
+      border-top: 1px solid #d8e1e8;
+      color: #657486;
+      font-size: 8.5pt;
+    }
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <div class="brand">LedgerOps</div>
+    <h1>Finance Calculation Notes</h1>
+    <p class="subtitle">
+      A plain-language reference for the formulas, thresholds, assumptions, and model calculations currently used by LedgerOps.
+    </p>
+    <div class="cover-card">
+      <strong>Purpose</strong>
+      <p>
+        This document explains how dashboard figures, wallet balances, runway forecasts, FX recommendations,
+        anomaly scores, payment-delay risk, and compliance scores are calculated.
+      </p>
+      <p>
+        It documents the current code behavior. It is not an accounting policy, investment recommendation,
+        credit decision, or regulatory opinion.
+      </p>
+    </div>
+    <div class="meta">
+      Prepared from the LedgerOps codebase<br>
+      Version date: June 24, 2026
+    </div>
+  </section>
+
+  <h2>1. Calculation Layers</h2>
+  <p>LedgerOps currently calculates information in three different layers:</p>
+  <table>
+    <thead>
+      <tr><th>Layer</th><th>Purpose</th><th>Primary data source</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Account ledger</td>
+        <td>Balances, payments, transfers, invoices, and transaction history</td>
+        <td>Authenticated user or company workspace database records</td>
+      </tr>
+      <tr>
+        <td>Dashboard summaries</td>
+        <td>Fast operational totals and charts</td>
+        <td>Payments, invoices, transactions, alerts, and FX-rate tables</td>
+      </tr>
+      <tr>
+        <td>Intelligence services</td>
+        <td>Runway, FX, anomaly, payment-delay, and compliance decisions</td>
+        <td>Account-scoped records transformed into model or rule inputs</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="warning">
+    <strong>Important:</strong> The dashboard cash-runway card still uses a lightweight heuristic, while the
+    Cash Runway Intelligence page uses account inflows, outflows, and current cash. These two numbers can differ.
+  </div>
+
+  <h2>2. Money Storage and Wallet Arithmetic</h2>
+
+  <h3>2.1 Minor-unit storage</h3>
+  <p>
+    Demo wallet balances and chat payment amounts are stored in the currency's minor unit. For INR, USD, and
+    similar currencies, 100 minor units equal one major currency unit.
+  </p>
+  <div class="formula-card">
+    <div class="formula">Displayed balance = balance_minor / 100</div>
+    <div class="formula">Stored payment amount = round(displayed amount x 100)</div>
+  </div>
+  <div class="example">
+    A stored balance of <code>2,500,000</code> minor units is displayed as <code>25,000.00</code>.
+  </div>
+
+  <h3>2.2 Demo transfer</h3>
+  <div class="formula-card">
+    <div class="formula">Sender balance after payment = sender balance before payment - payment amount</div>
+    <div class="formula">Recipient balance after payment = recipient balance before payment + payment amount</div>
+  </div>
+  <p>The transfer is rejected when:</p>
+  <ul>
+    <li>The sender does not have enough balance.</li>
+    <li>The sender and recipient demo wallets do not use the same currency.</li>
+    <li>The recipient is not a valid demo contact.</li>
+  </ul>
+  <p>
+    Each completed demo transfer creates an outbound transaction for the sender and an inbound transaction for
+    the recipient.
+  </p>
+
+  <h3>2.3 Card or checkout amount conversion</h3>
+  <div class="formula-card">
+    <div class="formula">Provider amount_minor = round(invoice amount x 100)</div>
+  </div>
+  <p>
+    When a checkout is verified, LedgerOps checks that the paid amount and paid currency match the invoice before
+    marking the invoice as paid.
+  </p>
+
+  <h2>3. Dashboard Summary Formulas</h2>
+
+  <h3>3.1 Total transaction volume</h3>
+  <div class="formula-card">
+    <div class="formula">Total transaction volume = sum(all account Payment.amount values)</div>
+  </div>
+  <p>
+    The implementation sums payment rows belonging to the signed-in account or company workspace. It currently
+    does not filter by payment status, so processing or unsettled payment records may be included if present.
+  </p>
+
+  <h3>3.2 Pending invoices</h3>
+  <div class="formula-card">
+    <div class="formula">Pending invoices = count(invoices where status = "pending")</div>
+  </div>
+
+  <h3>3.3 Dashboard cash runway</h3>
+  <div class="formula-card">
+    <div class="formula">Dashboard runway days = max(21, 82 - 3 x pending invoice count)</div>
+  </div>
+  <div class="warning">
+    This is a display heuristic, not a cash-flow forecast. It should eventually be replaced by the same account-data
+    calculation used by the Cash Runway Intelligence page.
+  </div>
+
+  <h3>3.4 Currency exposure</h3>
+  <div class="formula-card">
+    <div class="formula">Exposure[currency] = sum(transaction amounts in currency) + sum(pending invoice amounts in currency)</div>
+  </div>
+  <p>
+    The current dashboard adds all transaction amounts without subtracting outbound transactions. Therefore it
+    measures gross activity plus open receivables, rather than a true signed net currency position.
+  </p>
+
+  <h3>3.5 Dashboard risk score</h3>
+  <div class="formula-card">
+    <div class="formula">Anomaly set = transactions where stored risk_score &gt; 65</div>
+    <div class="formula">Dashboard risk score = average(risk_score values in anomaly set)</div>
+  </div>
+  <p>If no transaction exceeds 65, the displayed result is zero.</p>
+
+  <h3>3.6 Monthly transaction volume</h3>
+  <div class="formula-card">
+    <div class="formula">Monthly volume[month] = sum(transaction amount for every transaction in that month)</div>
+  </div>
+  <p>
+    Both inbound and outbound transaction amounts are currently added as positive values. The chart therefore
+    represents gross activity, not net cash movement.
+  </p>
+
+  <h3>3.7 Dashboard cash-flow chart</h3>
+  <div class="formula-card">
+    <div class="formula">Incoming[month] = sum(all transaction amounts in the month)</div>
+    <div class="formula">Estimated expenses[month] = Incoming[month] x 0.58</div>
+  </div>
+  <div class="warning">
+    The 58% expense value is a placeholder approximation. It is not derived from actual outbound transactions and
+    should not be used for financial decisions.
+  </div>
+
+  <h3>3.8 Country payment exposure</h3>
+  <div class="formula-card">
+    <div class="formula">Country volume[country] = sum(transaction amounts associated with that country)</div>
+  </div>
+
+  <h2 class="page-break">4. Cash Runway Intelligence</h2>
+  <p>
+    The intelligence runway uses account activity rather than the dashboard heuristic. It requires at least one
+    incoming and one outgoing transaction. Otherwise LedgerOps returns an insufficient-data message.
+  </p>
+
+  <h3>4.1 Observation period</h3>
+  <div class="formula-card">
+    <div class="formula">Observed months = max((latest transaction date - earliest transaction date) / 30, 1)</div>
+  </div>
+  <p>
+    A minimum of one month is used even when the account history covers only a few days. This prevents division by
+    a very small time period, but early estimates remain unstable.
+  </p>
+
+  <h3>4.2 Observed monthly outgoing</h3>
+  <div class="formula-card">
+    <div class="formula">Monthly outgoing = sum(outbound transaction amounts) / observed months</div>
+  </div>
+
+  <h3>4.3 Current cash</h3>
+  <div class="formula-card">
+    <div class="formula">Wallet accounts: current cash = sum(wallet balances)</div>
+    <div class="formula">Other accounts: current cash = max(sum(inbound) - sum(outbound), 0)</div>
+  </div>
+
+  <h3>4.4 Average incoming amount</h3>
+  <div class="formula-card">
+    <div class="formula">Average incoming = sum(last 12 incoming amounts) / count(last 12 incoming amounts)</div>
+  </div>
+  <p>
+    This is an average per incoming transaction, not a time-normalized monthly revenue value.
+  </p>
+
+  <h3>4.5 Delayed-invoice drag</h3>
+  <div class="formula-card">
+    <div class="formula">Delayed-invoice drag = sum(pending invoice amounts) x 0.22</div>
+  </div>
+  <p>
+    The 22% factor represents an assumed collection delay impact. In the current implementation it is only used
+    when current cash is not explicitly provided.
+  </p>
+
+  <h3>4.6 Monthly burn</h3>
+  <div class="formula-card">
+    <div class="formula">Monthly burn = expenses + payroll - subscriptions - average incoming</div>
+  </div>
+  <p>
+    The backend currently sends observed monthly outgoing as <code>expenses</code>, while payroll and subscriptions
+    are zero until those account data sources are implemented.
+  </p>
+
+  <h3>4.7 Projected runway</h3>
+  <div class="formula-card">
+    <div class="formula">Raw runway days = current cash / max(monthly burn, 1) x 30</div>
+    <div class="formula">Projected runway days = integer clamp(raw runway days, 0, 365)</div>
+  </div>
+  <table>
+    <thead><tr><th>Projected days</th><th>Risk level</th></tr></thead>
+    <tbody>
+      <tr><td>Less than 35</td><td>High</td></tr>
+      <tr><td>35 to 74</td><td>Medium</td></tr>
+      <tr><td>75 or more</td><td>Low</td></tr>
+    </tbody>
+  </table>
+
+  <h3>4.8 Forecast series</h3>
+  <div class="formula-card">
+    <div class="formula">Week i cash = current cash - (monthly burn / 4 x i) + (average incoming x 0.2)</div>
+  </div>
+
+  <div class="example">
+    <strong>Example: the 24-day result</strong><br>
+    Current cash = INR 8,000<br>
+    Observed outgoing = INR 10,050<br>
+    Average incoming = INR 50<br>
+    Monthly burn = 10,050 - 50 = INR 10,000<br>
+    Runway = 8,000 / 10,000 x 30 = 24 days
+  </div>
+
+  <div class="warning">
+    A forecast based on only one incoming and two outgoing transactions has low statistical confidence. The current
+    UI labels the method as a forecast, but confidence should eventually reflect sample size and observation length.
+  </div>
+
+  <h2>5. FX Intelligence</h2>
+
+  <h3>5.1 Selected currency</h3>
+  <div class="formula-card">
+    <div class="formula">Selected currency = currency with the largest calculated exposure</div>
+  </div>
+  <p>
+    Exposure is built from pending invoices and transaction amounts. The current implementation does not yet
+    consistently remove the account's native currency or subtract outbound amounts.
+  </p>
+
+  <h3>5.2 Rate return and volatility</h3>
+  <div class="formula-card">
+    <div class="formula">Rate return[t] = (rate[t] / rate[t-1]) - 1</div>
+    <div class="formula">Raw volatility = standard deviation(rate returns) x 1000</div>
+    <div class="formula">Displayed volatility score = min(raw volatility x 4, 100)</div>
+  </div>
+  <table>
+    <thead><tr><th>Raw volatility</th><th>Risk level</th></tr></thead>
+    <tbody>
+      <tr><td>Greater than 18</td><td>High</td></tr>
+      <tr><td>Greater than 7 and up to 18</td><td>Medium</td></tr>
+      <tr><td>7 or below</td><td>Low</td></tr>
+    </tbody>
+  </table>
+
+  <h3>5.3 Trend</h3>
+  <div class="formula-card">
+    <div class="formula">Trend slope = linear regression slope over up to 30 recent exchange rates</div>
+    <div class="formula">Slope &gt; 0: strengthening; otherwise: weakening</div>
+  </div>
+
+  <h3>5.4 Conversion recommendation</h3>
+  <table>
+    <thead><tr><th>Condition</th><th>Hold</th><th>Convert now</th></tr></thead>
+    <tbody>
+      <tr><td>Strengthening and risk is not High</td><td>70%</td><td>30%</td></tr>
+      <tr><td>Medium risk</td><td>45%</td><td>55%</td></tr>
+      <tr><td>All other cases</td><td>25%</td><td>75%</td></tr>
+    </tbody>
+  </table>
+  <div class="note">
+    The recommendation is an operational staging rule, not a prediction that the market will move in a guaranteed
+    direction.
+  </div>
+
+  <h2 class="page-break">6. Fraud and Anomaly Detection</h2>
+
+  <h3>6.1 Transaction feature vector</h3>
+  <div class="formula-card">
+    <div class="formula">Features = [amount, country risk, transaction hour, stored transaction risk score]</div>
+  </div>
+  <p>
+    Two unsupervised models assess how far the transaction is from the learned normal pattern:
+    Isolation Forest and One-Class SVM.
+  </p>
+
+  <h3>6.2 Anomaly score</h3>
+  <div class="formula-card">
+    <div class="formula">Raw score = 70 - (Isolation Forest decision x 90) - (One-Class SVM decision x 12)</div>
+    <div class="formula">Anomaly score = integer clamp(raw score, 0, 100)</div>
+  </div>
+  <p>
+    Lower model decision values indicate a transaction farther from normal, which raises the displayed anomaly
+    score.
+  </p>
+
+  <h3>6.3 Explanation rules</h3>
+  <table>
+    <thead><tr><th>Condition</th><th>Explanation added</th></tr></thead>
+    <tbody>
+      <tr><td>Amount greater than 60,000</td><td>Amount is abnormal versus the trained SMB range</td></tr>
+      <tr><td>Country risk greater than 0.40</td><td>Elevated-risk country pattern</td></tr>
+      <tr><td>Hour before 07:00 or after 22:00</td><td>Unusual transaction timing</td></tr>
+      <tr><td>Counterparty appears once</td><td>First-time payer verification</td></tr>
+      <tr><td>Invoice difference exceeds tolerance</td><td>Invoice mismatch</td></tr>
+    </tbody>
+  </table>
+
+  <h3>6.4 Invoice mismatch tolerance</h3>
+  <div class="formula-card">
+    <div class="formula">Tolerance = max(invoice amount x 5%, 100)</div>
+    <div class="formula">Mismatch = absolute(transaction amount - invoice amount) &gt; tolerance</div>
+  </div>
+
+  <h3>6.5 Batch results</h3>
+  <div class="formula-card">
+    <div class="formula">Average anomaly score = mean(scores for up to 40 recent transactions)</div>
+    <div class="formula">Flagged count = count(transaction scores greater than or equal to 70)</div>
+    <div class="formula">Headline anomaly = highest-scoring transaction in the analyzed batch</div>
+  </div>
+
+  <h2>7. Payment-Delay Risk</h2>
+  <p>The payment-delay feature vector contains:</p>
+  <div>
+    <span class="tag">log(1 + invoice amount)</span>
+    <span class="tag">country risk</span>
+    <span class="tag">currency risk</span>
+    <span class="tag">average client delay</span>
+    <span class="tag">payment history</span>
+    <span class="tag">days until due</span>
+    <span class="tag">past delay count</span>
+  </div>
+
+  <h3>7.1 Model blend</h3>
+  <div class="formula-card">
+    <div class="formula">Delay probability = mean(Logistic Regression probability, Random Forest probability, XGBoost probability)</div>
+    <div class="formula">Delay risk = round(delay probability x 100)</div>
+  </div>
+
+  <h3>7.2 Training label used by the current baseline</h3>
+  <div class="formula-card">
+    <div class="formula">Synthetic risk = 0.18 + log(1+amount)/24 + country risk + currency risk + history/30 + delays/12 - payment history/2</div>
+    <div class="formula">Training label = delayed when synthetic risk &gt; 0.82</div>
+  </div>
+  <div class="warning">
+    The current baseline models are trained from deterministic synthetic data and persisted after their first
+    training. Predictions use each account's invoice and customer features, but the training set is not yet a
+    production history of real, outcome-labelled invoices.
+  </div>
+
+  <h2>8. Compliance Score</h2>
+  <div class="formula-card">
+    <div class="formula">Starting compliance score = 100</div>
+    <div class="formula">Final score = max(100 - applicable deductions, 0)</div>
+  </div>
+  <table>
+    <thead><tr><th>Condition</th><th>Deduction</th></tr></thead>
+    <tbody>
+      <tr><td>Restricted country: IR, KP, SY, or CU</td><td>-45</td></tr>
+      <tr><td>Transaction amount at least 50,000</td><td>-18</td></tr>
+      <tr><td>KYC document missing</td><td>-15</td></tr>
+      <tr><td>Invoice mismatch beyond max(5%, 100)</td><td>-22</td></tr>
+      <tr><td>Payer name missing</td><td>-10</td></tr>
+    </tbody>
+  </table>
+  <table>
+    <thead><tr><th>Final score</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>80 to 100</td><td>Pass</td></tr>
+      <tr><td>55 to 79</td><td>Review</td></tr>
+      <tr><td>0 to 54</td><td>Blocked</td></tr>
+    </tbody>
+  </table>
+
+  <h2 class="page-break">9. Country and Currency Risk Constants</h2>
+  <p>These constants are features used by the current baseline models.</p>
+  <table>
+    <thead><tr><th>Country</th><th>Risk value</th><th>Currency</th><th>Risk value</th></tr></thead>
+    <tbody>
+      <tr><td>US</td><td>0.15</td><td>USD</td><td>0.12</td></tr>
+      <tr><td>CA</td><td>0.18</td><td>CAD</td><td>0.18</td></tr>
+      <tr><td>DE</td><td>0.14</td><td>EUR</td><td>0.16</td></tr>
+      <tr><td>AE</td><td>0.34</td><td>AED</td><td>0.22</td></tr>
+      <tr><td>JP</td><td>0.38</td><td>JPY</td><td>0.35</td></tr>
+      <tr><td>ZA</td><td>0.58</td><td>ZAR</td><td>0.62</td></tr>
+      <tr><td>BR</td><td>0.42</td><td>GBP</td><td>0.20</td></tr>
+      <tr><td>IN</td><td>0.33</td><td>Unknown currency</td><td>0.40</td></tr>
+      <tr><td>Unknown country</td><td>0.45</td><td></td><td></td></tr>
+    </tbody>
+  </table>
+  <div class="warning">
+    These values are engineering constants, not official sovereign-risk ratings. They require governance,
+    documentation, validation, and periodic review before production use.
+  </div>
+
+  <h2>10. Data Sufficiency Rules</h2>
+  <table>
+    <thead><tr><th>Analysis</th><th>Minimum data required</th></tr></thead>
+    <tbody>
+      <tr><td>FX</td><td>Currency exposure and at least 3 rate observations for the selected currency</td></tr>
+      <tr><td>Anomaly</td><td>At least 1 account transaction</td></tr>
+      <tr><td>Cash runway</td><td>At least 1 incoming and 1 outgoing account transaction</td></tr>
+      <tr><td>Compliance</td><td>At least 1 account transaction with a known payer or counterparty</td></tr>
+      <tr><td>Payment delay</td><td>A selected account invoice and its customer history for meaningful results</td></tr>
+    </tbody>
+  </table>
+  <p>
+    When these requirements are not met, the product should show that more account activity is needed rather than
+    inventing a score.
+  </p>
+
+  <h2>11. Recommended Calculation Improvements</h2>
+  <ol>
+    <li>Use the account preference currency as the native currency and exclude it from FX exposure.</li>
+    <li>Convert foreign amounts into the native currency before comparing or summing them.</li>
+    <li>Subtract outbound transactions when calculating net exposure and net cash movement.</li>
+    <li>Replace the dashboard runway heuristic with the intelligence runway calculation.</li>
+    <li>Replace the dashboard 58% expense approximation with actual outbound transaction categories.</li>
+    <li>Store payroll, subscriptions, recurring costs, and available bank balances as account data.</li>
+    <li>Calculate confidence from observation length, sample count, missing fields, and model validation.</li>
+    <li>Train production models from outcome-labelled, consented, account-safe historical data.</li>
+    <li>Version every model, formula, threshold, and risk constant used to produce a decision.</li>
+    <li>Keep model recommendations advisory and require human review for high-impact decisions.</li>
+  </ol>
+
+  <h2>12. Code Reference</h2>
+  <table>
+    <thead><tr><th>Area</th><th>Current source file</th></tr></thead>
+    <tbody>
+      <tr><td>Dashboard totals and charts</td><td><code>backend/app/routers/resources.py</code></td></tr>
+      <tr><td>Account-scoped intelligence inputs</td><td><code>backend/app/routers/intelligence.py</code></td></tr>
+      <tr><td>ML formulas and thresholds</td><td><code>ml-service/app/main.py</code></td></tr>
+      <tr><td>Compliance deductions</td><td><code>backend/app/services/compliance.py</code></td></tr>
+      <tr><td>Wallet and payment arithmetic</td><td><code>backend/app/routers/payment_app.py</code></td></tr>
+      <tr><td>Provider minor-unit conversion</td><td><code>backend/app/services/payment_provider.py</code></td></tr>
+    </tbody>
+  </table>
+
+  <div class="footer-note">
+    LedgerOps Finance Calculation Notes, generated June 24, 2026. This document describes the implementation at
+    generation time and should be regenerated after material formula or model changes.
+  </div>
+</body>
+</html>

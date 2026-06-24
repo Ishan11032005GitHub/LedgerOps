@@ -1,6 +1,6 @@
-# InfinityGuard AI Architecture
+# LedgerOps Architecture
 
-InfinityGuard AI is a standalone finance intelligence layer for cross-border SMB payment operations. It is designed as a drop-in integration surface with REST APIs and webhooks, using simulated data and mock models instead of private fintech systems.
+LedgerOps is a standalone finance intelligence layer for cross-border SMB payment operations. It is designed as a drop-in integration surface with REST APIs and webhooks, using simulated data and mock models instead of private fintech systems.
 
 ## Services
 

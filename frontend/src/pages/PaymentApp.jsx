@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowDownLeft, ArrowUpRight, CheckCircle2, CreditCard, Link as LinkIcon, Plus, QrCode, RefreshCw, ScanLine, ShieldCheck, Star, Trash2, X } from "lucide-react";
 import { Card, Skeleton } from "../components/Card.jsx";
+import PaymentChatPanel from "../components/PaymentChatPanel.jsx";
 import { accountStorageKey, readStoredUser, walletHandle } from "../lib/account.js";
 import { api } from "../lib/api.js";
 
-const contacts = [
+const fallbackContacts = [
   { name: "Northstar Robotics", handle: "northstar@pay", currency: "USD", color: "bg-mint" },
   { name: "Kairo Retail Group", handle: "kairo@pay", currency: "AED", color: "bg-blue-600" },
   { name: "Sakura Supply KK", handle: "sakura@pay", currency: "JPY", color: "bg-coral" },
@@ -35,8 +36,9 @@ export default function PaymentApp() {
   const [methodForm, setMethodForm] = useState(emptyMethod);
   const [invoices, setInvoices] = useState(cached?.invoices || []);
   const [mode, setMode] = useState("pay");
-  const [selected, setSelected] = useState(contacts[0]);
-  const [amount, setAmount] = useState("2500");
+  const [contacts, setContacts] = useState(cached?.contacts || fallbackContacts);
+  const [selected, setSelected] = useState(cached?.contacts?.[0] || fallbackContacts[0]);
+  const [amount, setAmount] = useState("500");
   const [note, setNote] = useState("Invoice settlement");
   const [invoiceId, setInvoiceId] = useState("");
   const [message, setMessage] = useState("");
@@ -47,15 +49,16 @@ export default function PaymentApp() {
   const [loadError, setLoadError] = useState("");
   const account = readStoredUser();
   const currentWalletHandle = walletHandle(account);
-  const gatewayBalance = 0;
+  const gatewayBalance = status?.available_balance || 0;
 
   async function load() {
     setLoadError("");
-    const [statusResult, invoiceResult, paymentResult, methodResult] = await Promise.allSettled([
+    const [statusResult, invoiceResult, paymentResult, methodResult, contactResult] = await Promise.allSettled([
       api("/api/payment-app/status"),
       api("/api/invoices"),
       api("/api/payments"),
       api("/api/payment-app/payment-methods"),
+      api("/api/payment-app/demo/contacts"),
     ]);
     if (statusResult.status === "rejected") throw statusResult.reason;
     const statusData = statusResult.value;
@@ -63,15 +66,19 @@ export default function PaymentApp() {
     const pendingInvoices = invoiceData.filter((invoice) => invoice.status === "pending");
     const paymentData = paymentResult.status === "fulfilled" ? paymentResult.value : [];
     const methodData = methodResult.status === "fulfilled" ? methodResult.value : [];
+    const contactData = contactResult.status === "fulfilled" && contactResult.value.length ? contactResult.value : fallbackContacts;
     setStatus(statusData);
     setInvoices(pendingInvoices);
     setPayments(paymentData.slice(0, 6));
     setMethods(methodData);
+    setContacts(contactData);
+    setSelected((current) => contactData.find((contact) => contact.handle === current?.handle) || contactData[0]);
     paymentAppCache[accountStorageKey()] = {
       status: statusData,
       invoices: pendingInvoices,
       payments: paymentData.slice(0, 6),
       methods: methodData,
+      contacts: contactData,
     };
     if (methodResult.status === "rejected") {
       setMessage("Saved cards will be available after the backend service is updated. Wallet activity is still accessible.");
@@ -95,6 +102,8 @@ export default function PaymentApp() {
     setPayments(cachedAccount?.payments || []);
     setMethods(cachedAccount?.methods || []);
     setInvoices(cachedAccount?.invoices || []);
+    setContacts(cachedAccount?.contacts || fallbackContacts);
+    setSelected(cachedAccount?.contacts?.[0] || fallbackContacts[0]);
     const setupSession = new URLSearchParams(window.location.search).get("card_setup");
     if (setupSession === "cancelled") {
       setMessage("Card setup cancelled.");
@@ -142,9 +151,8 @@ export default function PaymentApp() {
     setLoading("sync");
     setMessage("");
     try {
-      const result = await api("/api/payment-app/sync-demo", { method: "POST" });
-      setMessage(`Synced ${result.imported_payments} latest wallet payment.`);
       await load();
+      setMessage("Gateway activity refreshed.");
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -209,7 +217,7 @@ export default function PaymentApp() {
     setLink(null);
     const endpoint = mode === "pay" ? "/api/payment-app/pay" : "/api/payment-app/request";
     const payload = mode === "pay"
-      ? { recipient_name: selected.name, recipient_handle: selected.handle, amount: Number(amount), currency: selected.currency, note, rail: "Wallet Pay", payment_method_id: selectedMethod ? selectedMethod.id : null }
+      ? { recipient_name: selected.name, recipient_handle: selected.handle, amount: Number(amount), currency: selected.currency, note, rail: status.mode === "demo" ? "LedgerOps Demo" : "Card", payment_method_id: selectedMethod ? selectedMethod.id : null, idempotency_key: crypto.randomUUID() }
       : { payer_name: selected.name, payer_handle: selected.handle, amount: Number(amount), currency: selected.currency, note };
     try {
       const result = await api(endpoint, { method: "POST", body: JSON.stringify(payload) });
@@ -234,7 +242,7 @@ export default function PaymentApp() {
         body: JSON.stringify({ invoice_id: Number(invoiceId) }),
       });
       setLink(result);
-      setLinkMessage(`Checkout link ready for ${result.invoice_number}. Open checkout, complete the test payment, then verify it here.`);
+      setLinkMessage(`Checkout link ready for ${result.invoice_number}. Open the secure checkout to complete payment.`);
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -279,20 +287,39 @@ export default function PaymentApp() {
 
   return (
     <div className="space-y-5">
+      <div className={`flex flex-col justify-between gap-3 rounded-lg border p-4 sm:flex-row sm:items-center ${status.mode === "demo" || status.real_payments_enabled ? "border-mint/30 bg-mint/5" : status.mode === "stripe_test" ? "border-amber-300 bg-amber-50" : "border-coral/30 bg-coral/5"}`}>
+        <div>
+          <div className="text-sm font-semibold text-ink">
+            {status.mode === "demo" ? "Demo money network" : status.real_payments_enabled ? "Live collection configured" : status.mode === "stripe_test" ? "Stripe test mode" : "Payment provider not configured"}
+          </div>
+          <div className="mt-1 text-sm text-steel">
+            {status.mode === "demo"
+              ? "Simulated balances, transfers, history, and chat are enabled. No real money moves."
+              : status.real_payments_enabled
+              ? "Invoice checkout can collect real money after Stripe activates the account. Signed webhooks update the ledger."
+              : status.mode === "stripe_test"
+                ? "No real money moves while test keys are active."
+                : "Add Stripe credentials and a webhook secret before accepting payments."}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-xs font-medium uppercase text-steel">{status.mode?.replace("stripe_", "Stripe ")}</span>
+        </div>
+      </div>
       <div className="grid gap-5 xl:grid-cols-[390px_1fr]">
         <section className="rounded-lg border border-slate-200 bg-white shadow-soft">
           <div className="border-b border-slate-200 p-5">
             <div className="flex items-center justify-between">
               <div>
-                <div className="text-sm font-medium text-mint">Infinity Gateway</div>
+                <div className="text-sm font-medium text-mint">LedgerOps Demo</div>
                 <h2 className="mt-1 text-2xl font-semibold">Payment gateway</h2>
               </div>
               <span className={`rounded-full px-3 py-1 text-xs font-medium ${methods.length ? "bg-mint/10 text-mint" : "bg-amber-100 text-amber-700"}`}>{methods.length ? `${methods.length} card${methods.length === 1 ? "" : "s"}` : "Add a card"}</span>
             </div>
             <div className="mt-5 rounded-lg bg-ink p-5 text-white">
               <div className="text-sm text-white/65">Gateway balance</div>
-              <div className="mt-2 text-3xl font-semibold">{money(gatewayBalance)}</div>
-              <div className="mt-1 text-xs text-white/55">Card balances are not exposed by card networks.</div>
+              <div className="mt-2 text-3xl font-semibold">{money(gatewayBalance, status.currency || "USD")}</div>
+              <div className="mt-1 text-xs text-white/55">{status.mode === "demo" ? "Simulated spendable balance" : "Available gateway balance"}</div>
               <div className="mt-4 flex items-center justify-between text-xs text-white/65">
                 <span>Wallet ID: {currentWalletHandle}</span>
                 <ShieldCheck size={16} />
@@ -353,7 +380,7 @@ export default function PaymentApp() {
             <label className="mt-4 block text-sm font-medium">Note</label>
             <input value={note} onChange={(e) => setNote(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
 
-            <button disabled={loading === mode || !Number(amount) || (mode === "pay" && !selectedMethod)} className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-mint px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60">
+            <button disabled={loading === mode || !Number(amount) || (mode === "pay" && status.mode !== "demo" && !selectedMethod)} className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-mint px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-60">
               {mode === "pay" ? <ArrowUpRight size={17} /> : <ArrowDownLeft size={17} />}
               {loading === mode ? "Processing..." : mode === "pay" ? "Pay now" : "Request money"}
             </button>
@@ -383,7 +410,7 @@ export default function PaymentApp() {
             {showMethodForm && (
               <form onSubmit={addMethod} className="mt-4 rounded-md border border-slate-200 bg-panel p-4">
                 <div className="mb-3 flex items-center justify-between">
-                  <div className="text-sm font-medium">Add test card</div>
+                  <div className="text-sm font-medium">Add demo card</div>
                   <button type="button" title="Close" onClick={() => setShowMethodForm(false)} className="text-steel hover:text-ink"><X size={17} /></button>
                 </div>
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -434,6 +461,8 @@ export default function PaymentApp() {
               {!methods.length && !showMethodForm && <div className="col-span-full rounded-md border border-dashed border-slate-300 p-5 text-center text-sm text-steel">No saved cards yet.</div>}
             </div>
           </Card>
+
+          <PaymentChatPanel onActivity={load} />
 
           <Card title="Payments List">
             <div className="mt-4 space-y-3">
@@ -489,7 +518,7 @@ export default function PaymentApp() {
             </div>
             <div>
               <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 size={17} className="text-mint" /> Payment link ready</div>
-              <div className="mt-1 text-xs uppercase text-steel">Secure checkout | {link.mode === "stripe_test" ? "Test payment" : link.mode || "test"}</div>
+              <div className="mt-1 text-xs uppercase text-steel">Secure checkout | {link.mode === "stripe_live" ? "Live payment" : link.mode === "stripe_test" ? "Test payment" : link.mode || "unavailable"}</div>
               <div className="mt-2 break-all text-sm text-steel">{link.checkout_url}</div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <a href={link.checkout_url} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center rounded-md bg-mint px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">

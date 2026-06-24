@@ -1,6 +1,7 @@
 import { accountStorageKey, isSeededDemoAccount, readStoredUser } from "./account.js";
 
 const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000";
+const OFFLINE_DEMO_ENABLED = import.meta.env.VITE_ENABLE_OFFLINE_DEMO === "true";
 
 const demoCustomers = [
   { id: 1, country: "US", risk_rating: "Low", kyc_status: "Verified", name: "Northstar Robotics", currency: "USD", avg_delay_days: 2 },
@@ -69,11 +70,11 @@ function demoUser(payload = {}) {
   const accountType = payload.account_type || payload.accountType || "company";
   return {
     id: payload.email ? Math.abs([...payload.email].reduce((sum, char) => sum + char.charCodeAt(0), 0)) : 999,
-    email: payload.email || "admin@infinityguard.ai",
+    email: payload.email || "admin@ledgerops.ai",
     name: payload.name || "Avery Shah",
     role: accountType === "individual" ? "Admin" : payload.role || "Admin",
     account_type: accountType,
-    workspace_name: payload.workspace_name || payload.workspaceName || (accountType === "individual" ? `${payload.name || "Personal"} account` : "InfinityGuard workspace"),
+    workspace_name: payload.workspace_name || payload.workspaceName || (accountType === "individual" ? `${payload.name || "Personal"} account` : "LedgerOps workspace"),
   };
 }
 
@@ -179,7 +180,7 @@ function demoResponse(path, options = {}) {
   }
   if (path === "/api/payment-app/connect" && method === "POST") {
     localStorage.setItem(scopedKey("ig_demo_payment_connected", activeUser), "true");
-    return { status: "connected", provider: body.provider || "Stripe", account_name: body.account_name || "InfinityGuard Treasury", mode: body.mode || "test", event_id: Date.now() };
+    return { status: "connected", provider: body.provider || "Stripe", account_name: body.account_name || "LedgerOps Treasury", mode: body.mode || "test", event_id: Date.now() };
   }
   if (path === "/api/payment-app/sync-demo" && method === "POST") {
     const payment = { id: Date.now(), country: "US", rail: "Stripe", external_ref: `stripe_pi_${Date.now()}`, invoice_id: "", customer_id: 1, amount: 18420.75 };
@@ -251,7 +252,8 @@ export async function api(path, options = {}) {
   try {
     response = await fetch(`${API_URL}${path}`, { ...options, headers });
   } catch {
-    return demoResponse(path, options);
+    if (OFFLINE_DEMO_ENABLED) return demoResponse(path, options);
+    throw new Error("LedgerOps could not reach the server. No payment or account change was created.");
   }
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));

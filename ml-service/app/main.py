@@ -1,5 +1,8 @@
 from math import log1p
+import os
+from pathlib import Path
 from random import Random
+import joblib
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI
@@ -37,16 +40,22 @@ class AnomalyIn(BaseModel):
     invoice_mismatch: bool = False
 
 
+class AnomalyBatchIn(BaseModel):
+    items: list[AnomalyIn]
+
+
 class RunwayIn(BaseModel):
     incoming_payments: list[float] = []
-    subscriptions: float = 22000
-    expenses: float = 90000
-    payroll: float = 58000
+    subscriptions: float = 0
+    expenses: float = 0
+    payroll: float = 0
     delayed_invoices: list[float] = []
+    current_cash: float | None = None
 
 
-app = FastAPI(title="InfinityGuard AI ML Service", version="1.0.0")
+app = FastAPI(title="LedgerOps ML Service", version="1.0.0")
 models: dict[str, object] = {}
+model_path = Path(os.getenv("MODEL_ARTIFACT_PATH", "model_artifacts/models.joblib"))
 country_risk = {"US": 0.15, "CA": 0.18, "DE": 0.14, "AE": 0.34, "JP": 0.38, "ZA": 0.58, "BR": 0.42, "IN": 0.33}
 currency_risk = {"USD": 0.12, "CAD": 0.18, "EUR": 0.16, "AED": 0.22, "JPY": 0.35, "ZAR": 0.62, "GBP": 0.2}
 
@@ -65,6 +74,10 @@ def features(payload: PaymentDelayIn) -> list[float]:
 
 @app.on_event("startup")
 def train_models() -> None:
+    if model_path.exists():
+        models.update(joblib.load(model_path))
+        return
+
     rng = Random(7)
     x, y = [], []
     countries = list(country_risk)
@@ -87,11 +100,13 @@ def train_models() -> None:
     normal = np.array([[rng.uniform(1000, 45000), rng.uniform(0, 0.5), rng.randint(8, 21), rng.uniform(5, 45)] for _ in range(500)])
     models["isolation"] = IsolationForest(contamination=0.08, random_state=7).fit(normal)
     models["ocsvm"] = Pipeline([("scale", StandardScaler()), ("model", OneClassSVM(nu=0.08, kernel="rbf", gamma="scale"))]).fit(normal)
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump(models, model_path)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "ml-service"}
+    return {"status": "ok", "service": "ml-service", "models_loaded": sorted(models)}
 
 
 @app.post("/predict/payment-delay")
@@ -135,6 +150,10 @@ def fx(payload: FXIn):
 
 @app.post("/predict/anomaly")
 def anomaly(payload: AnomalyIn):
+    return score_anomaly(payload)
+
+
+def score_anomaly(payload: AnomalyIn) -> dict:
     vector = np.array([[payload.amount, country_risk.get(payload.country, 0.45), payload.hour, payload.risk_score]])
     iso = models["isolation"].decision_function(vector)[0]
     svm = models["ocsvm"].decision_function(vector)[0]
@@ -155,13 +174,24 @@ def anomaly(payload: AnomalyIn):
     return {"anomaly_score": score, "reasons": reasons, "models": {"isolation_forest": round(float(iso), 3), "one_class_svm": round(float(svm), 3)}}
 
 
+@app.post("/predict/anomaly/batch")
+def anomaly_batch(payload: AnomalyBatchIn):
+    results = [score_anomaly(item) for item in payload.items]
+    scores = [item["anomaly_score"] for item in results]
+    return {
+        "items": results,
+        "average_score": round(float(np.mean(scores)), 1) if scores else 0,
+        "flagged_count": sum(score >= 70 for score in scores),
+    }
+
+
 @app.post("/predict/runway")
 def runway(payload: RunwayIn):
     incoming = sum(payload.incoming_payments[-12:]) / max(len(payload.incoming_payments[-12:]), 1)
     delayed_drag = sum(payload.delayed_invoices) * 0.22
     monthly_burn = payload.expenses + payload.payroll - payload.subscriptions - incoming
-    current_cash = max(sum(payload.incoming_payments[-18:]) * 0.72 - delayed_drag, 50000)
-    projected_days = int(max(12, min(180, current_cash / max(monthly_burn, 1000) * 30)))
+    current_cash = max(payload.current_cash if payload.current_cash is not None else sum(payload.incoming_payments[-18:]) - delayed_drag, 0)
+    projected_days = int(max(0, min(365, current_cash / max(monthly_burn, 1) * 30)))
     risk = "High" if projected_days < 35 else "Medium" if projected_days < 75 else "Low"
     series = [{"week": i + 1, "cash": round(current_cash - (monthly_burn / 4) * i + incoming * 0.2, 2)} for i in range(12)]
-    return {"projected_days": projected_days, "risk": risk, "forecast": series, "method": "ARIMA/Prophet-style synthetic ensemble for operational planning"}
+    return {"projected_days": projected_days, "risk": risk, "forecast": series, "method": "Observed cash inflow and outflow projection"}

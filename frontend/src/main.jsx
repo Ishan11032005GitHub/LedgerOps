@@ -6,7 +6,7 @@ import ErrorBoundary from "./components/ErrorBoundary.jsx";
 import "./styles.css";
 
 const root = document.getElementById("root");
-root.innerHTML = '<div style="padding:24px;font-family:system-ui">Loading InfinityGuard AI...</div>';
+root.innerHTML = '<div style="padding:24px;font-family:system-ui">Loading LedgerOps...</div>';
 
 try {
   ReactDOM.createRoot(root).render(

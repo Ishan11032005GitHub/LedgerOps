@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: infinityguard-backend
+    name: ledgerops-backend
     env: docker
     rootDir: backend
     plan: starter
@@ -8,26 +8,26 @@ services:
     envVars:
       - key: DATABASE_URL
         fromDatabase:
-          name: infinityguard-postgres
+          name: ledgerops-postgres
           property: connectionString
       - key: REDIS_URL
         fromService:
           type: redis
-          name: infinityguard-redis
+          name: ledgerops-redis
           property: connectionString
       - key: JWT_SECRET
         generateValue: true
       - key: ML_SERVICE_URL
-        value: https://infinityguard-ml.onrender.com
+        value: https://ledgerops-ml.onrender.com
   - type: web
-    name: infinityguard-ml
+    name: ledgerops-ml
     env: docker
     rootDir: ml-service
     plan: starter
     healthCheckPath: /health
   - type: redis
-    name: infinityguard-redis
+    name: ledgerops-redis
     plan: starter
 databases:
-  - name: infinityguard-postgres
+  - name: ledgerops-postgres
     plan: starter

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     payment_provider_mode: str = "demo"
+    demo_only: bool = False
     password_reset_preview: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")

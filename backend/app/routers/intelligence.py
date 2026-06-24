@@ -1,15 +1,25 @@
 import httpx
 from fastapi import APIRouter, Depends
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from ..account_scope import account_user_ids
 from ..auth import current_user, require_roles
 from ..config import get_settings
 from ..database import get_db
-from ..models import ComplianceCheck, Customer, FXRate, Invoice, Payment, Prediction, Role, Transaction, User
+from ..models import ComplianceCheck, Customer, DemoWallet, FXRate, Invoice, Payment, Prediction, Role, Transaction, User
 from ..schemas import ComplianceIn, CopilotIn, PredictionProxyIn
 from ..services.compliance import evaluate_compliance
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
+
+
+def insufficient(reason: str, required: list[str], observed: dict) -> dict:
+    return {
+        "data_status": "insufficient",
+        "reason": reason,
+        "required": required,
+        "observed": observed,
+    }
 
 
 @router.post("/compliance/check", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
@@ -19,6 +29,52 @@ def compliance_check(payload: ComplianceIn, db: Session = Depends(get_db), user:
     db.add(check)
     db.commit()
     return result | {"check_id": check.id}
+
+
+@router.post("/compliance/current", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
+def current_compliance_check(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    scope = account_user_ids(db, user)
+    tx = (
+        db.query(Transaction)
+        .filter(Transaction.user_id.in_(scope))
+        .order_by(Transaction.risk_score.desc(), Transaction.created_at.desc())
+        .first()
+    )
+    if not tx:
+        return insufficient(
+            "No account transaction is available for compliance review.",
+            ["At least one account transaction", "A known payer or counterparty"],
+            {"transactions": 0},
+        )
+
+    payment = db.get(Payment, tx.payment_id) if tx.payment_id else None
+    invoice = db.get(Invoice, payment.invoice_id) if payment and payment.invoice_id else None
+    documents = (invoice.metadata_json or {}).get("documents", []) if invoice else []
+    body = {
+        "entity_type": "transaction",
+        "entity_id": tx.id,
+        "amount": tx.amount,
+        "country": tx.country,
+        "payer_name": tx.counterparty,
+        "invoice_amount": invoice.amount if invoice else None,
+        "documents": documents,
+    }
+    result = evaluate_compliance(body)
+    check = ComplianceCheck(
+        user_id=user.id,
+        entity_type="transaction",
+        entity_id=tx.id,
+        score=result["score"],
+        status=result["status"],
+        recommendations=result["recommendations"],
+    )
+    db.add(check)
+    db.commit()
+    return result | {
+        "check_id": check.id,
+        "data_status": "ready",
+        "source": {"transaction_id": tx.id, "counterparty": tx.counterparty},
+    }
 
 
 async def call_ml(path: str, payload: dict) -> dict:
@@ -49,34 +105,170 @@ async def payment_delay(payload: PredictionProxyIn, db: Session = Depends(get_db
 
 @router.post("/predict/fx")
 async def fx_prediction(payload: PredictionProxyIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    rates = db.query(FXRate).order_by(FXRate.as_of.desc()).limit(90).all()
-    body = payload.payload | {"rates": [{"currency": r.base_currency, "rate": r.rate, "volatility": r.volatility_score, "date": r.as_of.isoformat()} for r in rates]}
+    scope = account_user_ids(db, user)
+    invoice_exposure = (
+        db.query(Invoice.currency, func.sum(Invoice.amount))
+        .filter(Invoice.user_id.in_(scope), Invoice.status == "pending")
+        .group_by(Invoice.currency)
+        .all()
+    )
+    transaction_exposure = (
+        db.query(Transaction.currency, func.sum(Transaction.amount))
+        .filter(Transaction.user_id.in_(scope))
+        .group_by(Transaction.currency)
+        .all()
+    )
+    exposure: dict[str, float] = {}
+    for currency, amount in [*invoice_exposure, *transaction_exposure]:
+        exposure[currency] = exposure.get(currency, 0) + float(amount or 0)
+    if not exposure:
+        return insufficient(
+            "No currency exposure exists for this account yet.",
+            ["A payment, transaction, or open invoice with a currency"],
+            {"currencies": 0},
+        )
+
+    currency = max(exposure, key=exposure.get)
+    rates = (
+        db.query(FXRate)
+        .filter(FXRate.base_currency == currency)
+        .order_by(FXRate.as_of.desc())
+        .limit(30)
+        .all()
+    )
+    if len(rates) < 3:
+        return insufficient(
+            f"Not enough market-rate history is available for {currency}.",
+            ["At least 3 market-rate observations"],
+            {"currency": currency, "rate_observations": len(rates), "exposure": exposure[currency]},
+        )
+
+    body = {
+        "currency": currency,
+        "rates": [
+            {
+                "currency": r.base_currency,
+                "rate": r.rate,
+                "volatility": r.volatility_score,
+                "date": r.as_of.isoformat(),
+            }
+            for r in reversed(rates)
+        ],
+    }
     result = await call_ml("/predict/fx", body)
     db.add(Prediction(user_id=user.id, prediction_type="fx", entity_type="currency", entity_id=None, score=result.get("volatility_score", 50), output=result))
     db.commit()
-    return result
+    return result | {
+        "data_status": "ready",
+        "source": {"currency": currency, "exposure": round(exposure[currency], 2), "rate_observations": len(rates)},
+    }
 
 
 @router.post("/predict/anomaly")
 async def anomaly(payload: PredictionProxyIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    tx = db.query(Transaction).filter(Transaction.id == payload.transaction_id, Transaction.user_id.in_(account_user_ids(db, user))).first() if payload.transaction_id else None
-    body = payload.payload | ({"amount": tx.amount, "country": tx.country, "currency": tx.currency, "hour": tx.created_at.hour, "risk_score": tx.risk_score} if tx else {})
-    result = await call_ml("/predict/anomaly", body)
-    db.add(Prediction(user_id=user.id, prediction_type="anomaly", entity_type="transaction", entity_id=payload.transaction_id, score=result["anomaly_score"], output=result))
+    scope = account_user_ids(db, user)
+    tx_query = db.query(Transaction).filter(Transaction.user_id.in_(scope))
+    transactions = (
+        tx_query.filter(Transaction.id == payload.transaction_id).all()
+        if payload.transaction_id
+        else tx_query.order_by(Transaction.created_at.desc()).limit(40).all()
+    )
+    if not transactions:
+        return insufficient(
+            "No account transaction is available for anomaly analysis.",
+            ["At least one account transaction"],
+            {"transactions": 0},
+        )
+
+    counterparty_counts = dict(
+        db.query(Transaction.counterparty, func.count(Transaction.id))
+        .filter(Transaction.user_id.in_(scope))
+        .group_by(Transaction.counterparty)
+        .all()
+    )
+    bodies = []
+    for tx in transactions:
+        payment = db.get(Payment, tx.payment_id) if tx.payment_id else None
+        invoice = db.get(Invoice, payment.invoice_id) if payment and payment.invoice_id else None
+        bodies.append({
+            "amount": tx.amount,
+            "country": tx.country,
+            "currency": tx.currency,
+            "hour": tx.created_at.hour,
+            "risk_score": tx.risk_score,
+            "first_time_payer": counterparty_counts.get(tx.counterparty, 0) == 1,
+            "invoice_mismatch": bool(invoice and abs(invoice.amount - tx.amount) > max(invoice.amount * 0.05, 100)),
+        })
+
+    batch = await call_ml("/predict/anomaly/batch", {"items": bodies})
+    peak_index, peak = max(enumerate(batch["items"]), key=lambda item: item[1]["anomaly_score"])
+    peak_tx = transactions[peak_index]
+    result = peak | {
+        "average_score": batch["average_score"],
+        "flagged_count": batch["flagged_count"],
+    }
+    db.add(Prediction(user_id=user.id, prediction_type="anomaly", entity_type="transaction", entity_id=peak_tx.id, score=result["anomaly_score"], output=result))
     db.commit()
-    return result
+    return result | {
+        "data_status": "ready",
+        "source": {
+            "transaction_id": peak_tx.id,
+            "counterparty": peak_tx.counterparty,
+            "currency": peak_tx.currency,
+            "transactions_analyzed": len(transactions),
+        },
+    }
 
 
 @router.post("/predict/runway")
 async def runway(payload: PredictionProxyIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     scope = account_user_ids(db, user)
-    payments = db.query(Payment).filter(Payment.user_id.in_(scope)).order_by(Payment.received_at.desc()).limit(40).all()
+    transactions = (
+        db.query(Transaction)
+        .filter(Transaction.user_id.in_(scope))
+        .order_by(Transaction.created_at.desc())
+        .limit(180)
+        .all()
+    )
     invoices = db.query(Invoice).filter(Invoice.user_id.in_(scope), Invoice.status == "pending").all()
-    body = payload.payload | {"incoming_payments": [p.amount for p in payments], "delayed_invoices": [i.amount for i in invoices], "expenses": 92000, "payroll": 58000}
+    incoming = [tx.amount for tx in reversed(transactions) if tx.type == "inbound"]
+    outgoing = [tx.amount for tx in transactions if tx.type == "outbound"]
+    if not incoming or not outgoing:
+        return insufficient(
+            "Runway needs both incoming and outgoing account activity; fixed demo expenses are no longer used.",
+            ["At least one incoming transaction", "At least one outgoing transaction"],
+            {"incoming_transactions": len(incoming), "outgoing_transactions": len(outgoing), "pending_invoices": len(invoices)},
+        )
+
+    oldest = min(tx.created_at for tx in transactions)
+    newest = max(tx.created_at for tx in transactions)
+    observed_months = max((newest - oldest).days / 30, 1)
+    monthly_outgoing = sum(outgoing) / observed_months
+    wallets = db.query(DemoWallet).filter(DemoWallet.user_id.in_(scope)).all()
+    wallet_cash = sum(wallet.balance_minor / 100 for wallet in wallets)
+    net_transaction_cash = sum(tx.amount if tx.type == "inbound" else -tx.amount for tx in transactions)
+    current_cash = wallet_cash if wallets else max(net_transaction_cash, 0)
+    body = {
+        "incoming_payments": incoming,
+        "delayed_invoices": [i.amount for i in invoices],
+        "expenses": monthly_outgoing,
+        "payroll": 0,
+        "subscriptions": 0,
+        "current_cash": current_cash,
+    }
     result = await call_ml("/predict/runway", body)
     db.add(Prediction(user_id=user.id, prediction_type="runway", entity_type="company", entity_id=None, score=result["projected_days"], output=result))
     db.commit()
-    return result
+    return result | {
+        "data_status": "ready",
+        "source": {
+            "incoming_transactions": len(incoming),
+            "outgoing_transactions": len(outgoing),
+            "pending_invoices": len(invoices),
+            "current_cash": round(current_cash, 2),
+            "observed_monthly_outgoing": round(monthly_outgoing, 2),
+        },
+    }
 
 
 @router.post("/copilot")

@@ -5,7 +5,6 @@ import DataPage from "./pages/DataPage.jsx";
 import IntelligencePage from "./pages/IntelligencePage.jsx";
 import Login from "./pages/Login.jsx";
 import PasswordRecovery from "./pages/PasswordRecovery.jsx";
-import Copilot from "./pages/Copilot.jsx";
 import PaymentApp from "./pages/PaymentApp.jsx";
 import Settings from "./pages/Settings.jsx";
 
@@ -31,7 +30,6 @@ export default function App() {
         <Route path="/fraud" element={<IntelligencePage mode="fraud" />} />
         <Route path="/cash" element={<IntelligencePage mode="cash" />} />
         <Route path="/compliance" element={<IntelligencePage mode="compliance" />} />
-        <Route path="/copilot" element={<Copilot />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/settings/recovery" element={<PasswordRecovery insideAccount />} />
       </Route>

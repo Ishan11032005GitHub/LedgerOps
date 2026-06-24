@@ -44,7 +44,7 @@ def migrate_account_columns() -> None:
             if "workspace_name" not in user_columns:
                 connection.execute(text("ALTER TABLE users ADD COLUMN workspace_name VARCHAR(160)"))
             connection.execute(text("UPDATE users SET account_type = 'company' WHERE account_type IS NULL"))
-            connection.execute(text("UPDATE users SET workspace_name = 'InfinityGuard workspace' WHERE workspace_name IS NULL AND email LIKE '%@infinityguard.ai'"))
+            connection.execute(text("UPDATE users SET workspace_name = 'LedgerOps workspace' WHERE workspace_name IS NULL AND email LIKE '%@ledgerops.ai'"))
 
         for table in ACCOUNT_SCOPED_TABLES:
             if table not in existing_tables:
@@ -53,7 +53,7 @@ def migrate_account_columns() -> None:
             if "user_id" not in columns:
                 connection.execute(text(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER"))
 
-        admin_id = connection.execute(text("SELECT id FROM users WHERE email = 'admin@infinityguard.ai'")).scalar()
+        admin_id = connection.execute(text("SELECT id FROM users WHERE email = 'admin@ledgerops.ai'")).scalar()
         if admin_id:
             for table in ACCOUNT_SCOPED_TABLES:
                 if table in existing_tables:

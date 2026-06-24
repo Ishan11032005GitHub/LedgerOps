@@ -226,7 +226,7 @@ export default function Settings() {
           <form onSubmit={savePreferences} className="mt-4">
             <div className="mb-3 flex items-center gap-2 text-sm text-steel">
               <Bell size={17} />
-              Choose what InfinityGuard sends to your attention queue.
+              Choose what LedgerOps sends to your attention queue.
             </div>
             <Toggle label="Payment activity alerts" helper="Get alerted when collections or outgoing transfers settle." checked={preferences.paymentAlerts} onChange={(value) => setPreferences({ ...preferences, paymentAlerts: value })} />
             <Toggle label="High-risk alerts" helper="Notify me when anomaly and compliance flags need review." checked={preferences.riskAlerts} onChange={(value) => setPreferences({ ...preferences, riskAlerts: value })} />

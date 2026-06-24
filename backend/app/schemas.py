@@ -123,6 +123,7 @@ class WalletTransferIn(BaseModel):
     note: str | None = None
     rail: str = "Wallet"
     payment_method_id: int | None = None
+    idempotency_key: str = Field(min_length=16, max_length=120)
 
 
 class WalletRequestIn(BaseModel):
@@ -131,6 +132,11 @@ class WalletRequestIn(BaseModel):
     amount: float = Field(gt=0)
     currency: str = "USD"
     note: str | None = None
+
+
+class DemoChatIn(BaseModel):
+    recipient_id: int
+    text: str = Field(min_length=1, max_length=1000)
 
 
 class DashboardOut(BaseModel):

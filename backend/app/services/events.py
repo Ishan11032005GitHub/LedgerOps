@@ -13,7 +13,7 @@ def enqueue_event(db: Session, event_type: str, payload: dict, user_id: int | No
     db.refresh(event)
     try:
         client = redis.from_url(get_settings().redis_url, decode_responses=True)
-        client.lpush("infinityguard:events", str(event.id))
+        client.lpush("ledgerops:events", str(event.id))
     except redis.RedisError:
         event.last_error = "Redis unavailable; event retained for API-side processing"
         db.commit()

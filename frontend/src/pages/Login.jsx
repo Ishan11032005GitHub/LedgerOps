@@ -1,17 +1,20 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, ShieldCheck } from "lucide-react";
-import { login, signup } from "../lib/api.js";
+import { ArrowRight, RefreshCw, ShieldCheck } from "lucide-react";
+import { api, login, signup } from "../lib/api.js";
 
 export default function Login({ mode = "login" }) {
   const isSignup = mode === "signup";
   const [name, setName] = useState("Avery Shah");
-  const [email, setEmail] = useState("admin@infinityguard.ai");
+  const [email, setEmail] = useState("admin@ledgerops.ai");
   const [password, setPassword] = useState("AdminPass123");
   const [role, setRole] = useState("Finance Manager");
   const [accountType, setAccountType] = useState("company");
-  const [workspaceName, setWorkspaceName] = useState("InfinityGuard workspace");
+  const [workspaceName, setWorkspaceName] = useState("LedgerOps workspace");
   const [error, setError] = useState("");
+  const [demoLoading, setDemoLoading] = useState("");
+  const [demoResetting, setDemoResetting] = useState(false);
+  const [demoMessage, setDemoMessage] = useState("");
   const navigate = useNavigate();
   async function submit(e) {
     e.preventDefault();
@@ -24,13 +27,40 @@ export default function Login({ mode = "login" }) {
       setError(err.message);
     }
   }
+  async function chooseDemo(demoEmail) {
+    setEmail(demoEmail);
+    setPassword("DemoPass123");
+    setError("");
+    setDemoLoading(demoEmail);
+    try {
+      await login(demoEmail, "DemoPass123");
+      navigate("/");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDemoLoading("");
+    }
+  }
+  async function resetDemo() {
+    setError("");
+    setDemoMessage("");
+    setDemoResetting(true);
+    try {
+      await api("/api/payment-app/demo/public-reset", { method: "POST" });
+      setDemoMessage("Demo restored: Asha has INR 25,000 and Rohan has INR 18,000.");
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setDemoResetting(false);
+    }
+  }
   return (
     <main className="grid min-h-screen place-items-center bg-ink px-4 py-8">
       <form onSubmit={submit} className="w-full max-w-xl rounded-lg border border-white/10 bg-white p-7 shadow-soft">
         <div className="mb-6 flex items-center gap-3">
           <div className="grid h-11 w-11 place-items-center rounded-md bg-mint/10 text-mint"><ShieldCheck /></div>
           <div>
-            <h1 className="text-2xl font-semibold">{isSignup ? "Create your Infinity workspace" : "Welcome back"}</h1>
+            <h1 className="text-2xl font-semibold">{isSignup ? "Create your LedgerOps workspace" : "Welcome back"}</h1>
             <p className="text-sm text-steel">Connect your payment app, detect risky receivables, and operate finance from one command center.</p>
           </div>
         </div>
@@ -77,13 +107,41 @@ export default function Login({ mode = "login" }) {
         <button className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-mint px-4 py-2.5 font-medium text-white hover:bg-emerald-700">
           {isSignup ? "Create account" : "Sign in"} <ArrowRight size={17} />
         </button>
+        {!isSignup && (
+          <div className="mt-5 rounded-md border border-slate-200 bg-panel p-4">
+            <div className="text-xs font-medium uppercase tracking-wide text-steel">Two-account money-flow demo</div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-2">
+              <button disabled={Boolean(demoLoading)} type="button" onClick={() => chooseDemo("asha.demo@ledgerops.ai")} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-left hover:border-mint disabled:opacity-60">
+                <span className="block text-sm font-semibold">{demoLoading === "asha.demo@ledgerops.ai" ? "Opening..." : "Enter as Asha Mehta"}</span>
+                <span className="block text-xs text-steel">INR 25,000 demo balance</span>
+              </button>
+              <button disabled={Boolean(demoLoading)} type="button" onClick={() => chooseDemo("rohan.demo@ledgerops.ai")} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-left hover:border-mint disabled:opacity-60">
+                <span className="block text-sm font-semibold">{demoLoading === "rohan.demo@ledgerops.ai" ? "Opening..." : "Enter as Rohan Kapoor"}</span>
+                <span className="block text-xs text-steel">INR 18,000 demo balance</span>
+              </button>
+            </div>
+            <div className="mt-2 text-xs text-steel">Choose an account to sign in immediately. Use another browser or incognito window for the second account.</div>
+            <div className="mt-3 rounded-md border border-slate-200 bg-white p-3">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-semibold">Start fresh</div>
+                  <div className="text-xs text-steel">Reset balances, demo payments, requests, and chat before signing in.</div>
+                </div>
+                <button disabled={demoResetting || Boolean(demoLoading)} type="button" onClick={resetDemo} className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium hover:bg-panel disabled:opacity-60">
+                  <RefreshCw size={15} /> {demoResetting ? "Resetting..." : "Reset demo"}
+                </button>
+              </div>
+              {demoMessage && <div className="mt-2 rounded-md bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700">{demoMessage}</div>}
+            </div>
+          </div>
+        )}
         <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto] sm:items-center">
-          <div className="text-sm text-steel">{isSignup ? "Already have an account?" : "New to InfinityGuard?"}</div>
+          <div className="text-sm text-steel">{isSignup ? "Already have an account?" : "New to LedgerOps?"}</div>
           <Link className="inline-flex items-center justify-center rounded-md border border-slate-300 px-4 py-2 text-sm font-medium text-ink hover:bg-panel" to={isSignup ? "/login" : "/signup"}>
             {isSignup ? "Go to sign in" : "Create account"}
           </Link>
         </div>
-        {!isSignup && <div className="mt-4 text-xs text-steel">Seed users: finance@infinityguard.ai / FinancePass123, viewer@infinityguard.ai / ViewerPass123</div>}
+        {!isSignup && <div className="mt-4 text-xs text-steel">Open the second account in an incognito window or another browser to test both sides.</div>}
       </form>
     </main>
   );

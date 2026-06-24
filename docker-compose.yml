@@ -1,3 +1,5 @@
+name: ledgerops
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -5,8 +7,6 @@ services:
       POSTGRES_DB: infinityguard
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -17,13 +17,11 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
 
   ml-service:
     build: ./ml-service
-    ports:
-      - "9000:9000"
+    volumes:
+      - ml_models:/app/model_artifacts
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
       interval: 10s
@@ -37,9 +35,10 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET: local-dev-change-me
       ML_SERVICE_URL: http://ml-service:9000
-      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://localhost:8080
-      FRONTEND_URL: http://localhost:8080
-      PAYMENT_PROVIDER_MODE: demo
+      CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://localhost:8080,http://localhost:8081
+      FRONTEND_URL: http://localhost:8081
+      PAYMENT_PROVIDER_MODE: ${PAYMENT_PROVIDER_MODE:-disabled}
+      DEMO_ONLY: "true"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       PASSWORD_RESET_PREVIEW: "true"
@@ -57,10 +56,12 @@ services:
     build: ./frontend
     environment:
       VITE_API_URL: http://localhost:8000
+      VITE_ENABLE_OFFLINE_DEMO: "false"
     ports:
-      - "8080:80"
+      - "8081:80"
     depends_on:
       - backend
 
 volumes:
   pgdata:
+  ml_models:
