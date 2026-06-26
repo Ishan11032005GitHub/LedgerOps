@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ArrowRight, RefreshCw, ShieldCheck } from "lucide-react";
 import { api, login, signup } from "../lib/api.js";
@@ -8,6 +8,8 @@ export default function Login({ mode = "login" }) {
   const [name, setName] = useState("Avery Shah");
   const [email, setEmail] = useState("admin@ledgerops.ai");
   const [password, setPassword] = useState("AdminPass123");
+  const [otp, setOtp] = useState("");
+  const [needsMfa, setNeedsMfa] = useState(false);
   const [role, setRole] = useState("Finance Manager");
   const [accountType, setAccountType] = useState("company");
   const [workspaceName, setWorkspaceName] = useState("LedgerOps workspace");
@@ -15,16 +17,51 @@ export default function Login({ mode = "login" }) {
   const [demoLoading, setDemoLoading] = useState("");
   const [demoResetting, setDemoResetting] = useState(false);
   const [demoMessage, setDemoMessage] = useState("");
+  const [demoAccounts, setDemoAccounts] = useState([]);
   const navigate = useNavigate();
+
+  async function loadDemoAccounts() {
+    const accounts = await api("/api/payment-app/demo/public-accounts");
+    setDemoAccounts(accounts);
+    return accounts;
+  }
+
+  useEffect(() => {
+    if (!isSignup) loadDemoAccounts().catch(() => setDemoAccounts([]));
+  }, [isSignup]);
+
+  function demoAccount(email, fallbackName) {
+    return demoAccounts.find((account) => account.email === email) || {
+      email,
+      name: fallbackName,
+      balance: null,
+      currency: "INR",
+    };
+  }
+
+  function balanceLabel(account) {
+    if (account.balance == null) return "Loading current balance...";
+    try {
+      return `${new Intl.NumberFormat("en-IN", {
+        style: "currency",
+        currency: account.currency || "INR",
+        maximumFractionDigits: 2,
+      }).format(account.balance)} current balance`;
+    } catch {
+      return `${account.currency || "INR"} ${Number(account.balance).toLocaleString("en-IN")} current balance`;
+    }
+  }
+
   async function submit(e) {
     e.preventDefault();
     setError("");
     try {
       if (isSignup) await signup({ name, email, password, role, account_type: accountType, workspace_name: accountType === "company" ? workspaceName : "" });
-      else await login(email, password);
+      else await login(email, password, otp);
       navigate("/");
     } catch (err) {
       setError(err.message);
+      if (err.message.toLowerCase().includes("mfa")) setNeedsMfa(true);
     }
   }
   async function chooseDemo(demoEmail) {
@@ -47,13 +84,17 @@ export default function Login({ mode = "login" }) {
     setDemoResetting(true);
     try {
       await api("/api/payment-app/demo/public-reset", { method: "POST" });
-      setDemoMessage("Demo restored: Asha has INR 25,000 and Rohan has INR 18,000.");
+      const accounts = await loadDemoAccounts();
+      const summary = accounts.map((account) => `${account.name}: ${balanceLabel(account).replace(" current balance", "")}`).join(" | ");
+      setDemoMessage(`Demo restored. ${summary}`);
     } catch (err) {
       setError(err.message);
     } finally {
       setDemoResetting(false);
     }
   }
+  const asha = demoAccount("asha.demo@ledgerops.ai", "Asha Mehta");
+  const rohan = demoAccount("rohan.demo@ledgerops.ai", "Rohan Kapoor");
   return (
     <main className="grid min-h-screen place-items-center bg-ink px-4 py-8">
       <form onSubmit={submit} className="w-full max-w-xl rounded-lg border border-white/10 bg-white p-7 shadow-soft">
@@ -102,7 +143,12 @@ export default function Login({ mode = "login" }) {
           <label className="text-sm font-medium">Password</label>
           {!isSignup && <Link to="/forgot-password" className="text-sm font-medium text-mint hover:text-emerald-700">Forgot password?</Link>}
         </div>
-        <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
+        <input required minLength={isSignup ? 10 : 1} type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
+        {!isSignup && needsMfa && (
+          <label className="mt-4 block text-sm font-medium">Authenticator code
+            <input autoFocus required inputMode="numeric" pattern="\d{6}" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
+          </label>
+        )}
         {error && <div className="mt-3 rounded-md bg-coral/10 p-3 text-sm text-coral">{error}</div>}
         <button className="mt-5 flex w-full items-center justify-center gap-2 rounded-md bg-mint px-4 py-2.5 font-medium text-white hover:bg-emerald-700">
           {isSignup ? "Create account" : "Sign in"} <ArrowRight size={17} />
@@ -113,11 +159,11 @@ export default function Login({ mode = "login" }) {
             <div className="mt-3 grid gap-2 sm:grid-cols-2">
               <button disabled={Boolean(demoLoading)} type="button" onClick={() => chooseDemo("asha.demo@ledgerops.ai")} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-left hover:border-mint disabled:opacity-60">
                 <span className="block text-sm font-semibold">{demoLoading === "asha.demo@ledgerops.ai" ? "Opening..." : "Enter as Asha Mehta"}</span>
-                <span className="block text-xs text-steel">INR 25,000 demo balance</span>
+                <span className="block text-xs text-steel">{balanceLabel(asha)}</span>
               </button>
               <button disabled={Boolean(demoLoading)} type="button" onClick={() => chooseDemo("rohan.demo@ledgerops.ai")} className="rounded-md border border-slate-300 bg-white px-3 py-2 text-left hover:border-mint disabled:opacity-60">
                 <span className="block text-sm font-semibold">{demoLoading === "rohan.demo@ledgerops.ai" ? "Opening..." : "Enter as Rohan Kapoor"}</span>
-                <span className="block text-xs text-steel">INR 18,000 demo balance</span>
+                <span className="block text-xs text-steel">{balanceLabel(rohan)}</span>
               </button>
             </div>
             <div className="mt-2 text-xs text-steel">Choose an account to sign in immediately. Use another browser or incognito window for the second account.</div>

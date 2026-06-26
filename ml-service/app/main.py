@@ -60,11 +60,15 @@ country_risk = {"US": 0.15, "CA": 0.18, "DE": 0.14, "AE": 0.34, "JP": 0.38, "ZA"
 currency_risk = {"USD": 0.12, "CAD": 0.18, "EUR": 0.16, "AED": 0.22, "JPY": 0.35, "ZAR": 0.62, "GBP": 0.2}
 
 
+def currency_risk_value(currency: str) -> float:
+    return currency_risk.get(currency.upper(), 0.25)
+
+
 def features(payload: PaymentDelayIn) -> list[float]:
     return [
         log1p(payload.invoice_amount),
         country_risk.get(payload.country, 0.45),
-        currency_risk.get(payload.currency, 0.4),
+        currency_risk_value(payload.currency),
         payload.client_history,
         payload.payment_history,
         payload.days_until_due,
@@ -90,8 +94,8 @@ def train_models() -> None:
         payment_history = rng.uniform(0.45, 0.99)
         days = rng.randint(7, 60)
         delays = rng.randint(0, 8)
-        risk = 0.18 + log1p(amount) / 24 + country_risk[country] + currency_risk[currency] + hist / 30 + delays / 12 - payment_history / 2
-        x.append([log1p(amount), country_risk[country], currency_risk[currency], hist, payment_history, days, delays])
+        risk = 0.18 + log1p(amount) / 24 + country_risk[country] + currency_risk_value(currency) + hist / 30 + delays / 12 - payment_history / 2
+        x.append([log1p(amount), country_risk[country], currency_risk_value(currency), hist, payment_history, days, delays])
         y.append(1 if risk > 0.82 else 0)
     models["logistic"] = Pipeline([("scale", StandardScaler()), ("model", LogisticRegression(max_iter=400))]).fit(x, y)
     models["forest"] = RandomForestClassifier(n_estimators=160, random_state=7, max_depth=8).fit(x, y)

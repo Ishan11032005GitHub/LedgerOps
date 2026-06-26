@@ -31,6 +31,11 @@ const basePayments = [
   { id: 10, recipient: "Kairo Retail Group", country: "AE", rail: "SWIFT", external_ref: "pay_00013", invoice_id: 14, customer_id: 2, amount: 69280.95, currency: "AED", status: "settled" },
 ];
 
+const defaultDemoAccounts = [
+  { email: "asha.demo@ledgerops.ai", name: "Asha Mehta", balance: 25000, currency: "INR" },
+  { email: "rohan.demo@ledgerops.ai", name: "Rohan Kapoor", balance: 18000, currency: "INR" },
+];
+
 function scopedKey(name, user = readStoredUser()) {
   return `${name}:${accountStorageKey(user)}`;
 }
@@ -49,6 +54,15 @@ function storedMethods(user = readStoredUser()) {
     return JSON.parse(localStorage.getItem(scopedKey("ig_demo_methods", user)) || "[]");
   } catch {
     localStorage.removeItem(scopedKey("ig_demo_methods", user));
+    return [];
+  }
+}
+
+function storedQuickLinks(user = readStoredUser()) {
+  try {
+    return JSON.parse(localStorage.getItem(scopedKey("ig_quicklinks", user)) || "[]");
+  } catch {
+    localStorage.removeItem(scopedKey("ig_quicklinks", user));
     return [];
   }
 }
@@ -176,14 +190,22 @@ function demoResponse(path, options = {}) {
     };
   }
   if (path === "/api/payment-app/status") {
-    return { provider: "Secure card network", mode: "offline test", connected: true, sync_health: payments.length ? "offline_ready" : "needs_data", last_payment_at: null, last_sync_at: localStorage.getItem(scopedKey("ig_demo_last_sync", activeUser)), webhook_events: accountPayments.length + (seededDemo ? 3 : 0), mapped_payments: payments.length, saved_methods: accountMethods.length };
+    return { provider: "Secure card network", processor: "offline-demo", mode: "offline test", connected: true, sync_health: payments.length ? "offline_ready" : "needs_data", last_payment_at: null, last_sync_at: localStorage.getItem(scopedKey("ig_demo_last_sync", activeUser)), webhook_events: accountPayments.length + (seededDemo ? 3 : 0), mapped_payments: payments.length, saved_methods: accountMethods.length, issuer_agnostic: true, card_networks: ["Visa", "Mastercard", "RuPay (demo)"] };
+  }
+  if (path === "/api/payment-app/demo/public-accounts" && method === "GET") return defaultDemoAccounts;
+  if (path === "/api/payment-app/demo/public-reset" && method === "POST") {
+    return {
+      status: "reset",
+      balances: Object.fromEntries(defaultDemoAccounts.map((account) => [account.email, account.balance])),
+      currency: "INR",
+    };
   }
   if (path === "/api/payment-app/connect" && method === "POST") {
     localStorage.setItem(scopedKey("ig_demo_payment_connected", activeUser), "true");
-    return { status: "connected", provider: body.provider || "Stripe", account_name: body.account_name || "LedgerOps Treasury", mode: body.mode || "test", event_id: Date.now() };
+    return { status: "connected", provider: body.provider || "Card processor", account_name: body.account_name || "LedgerOps Treasury", mode: body.mode || "test", event_id: Date.now() };
   }
   if (path === "/api/payment-app/sync-demo" && method === "POST") {
-    const payment = { id: Date.now(), country: "US", rail: "Stripe", external_ref: `stripe_pi_${Date.now()}`, invoice_id: "", customer_id: 1, amount: 18420.75 };
+    const payment = { id: Date.now(), country: "US", rail: "Card processor", external_ref: `card_sync_${Date.now()}`, invoice_id: "", customer_id: 1, amount: 18420.75 };
     localStorage.setItem(scopedKey("ig_demo_payments", activeUser), JSON.stringify([payment, ...storedPayments(activeUser)]));
     localStorage.setItem(scopedKey("ig_demo_last_sync", activeUser), new Date().toISOString());
     return { status: "synced", imported_payments: 1, payment_id: payment.id, external_ref: payment.external_ref, event_id: Date.now() };
@@ -191,7 +213,61 @@ function demoResponse(path, options = {}) {
   if (path === "/api/payment-app/payment-link" && method === "POST") {
     const invoice = invoices.find((item) => item.id === body.invoice_id);
     if (!invoice) throw new Error("No pending invoices are available for this account yet.");
-    return { status: "created", provider: "Stripe", invoice_number: invoice.invoice_number, amount: invoice.amount, currency: invoice.currency, checkout_url: `https://checkout.stripe.com/c/pay/ig_chk_${invoice.id}_${Date.now()}` };
+    return { status: "created", provider: "Card processor", invoice_number: invoice.invoice_number, amount: invoice.amount, currency: invoice.currency, checkout_url: `https://checkout.stripe.com/c/pay/ig_chk_${invoice.id}_${Date.now()}` };
+  }
+  if (path === "/api/payment-app/quicklinks" && method === "GET") return storedQuickLinks(activeUser);
+  if (path === "/api/payment-app/quicklinks" && method === "POST") {
+    const link = {
+      id: Date.now(),
+      public_id: `demo_${Date.now()}`,
+      ...body,
+      status: "active",
+      provider: "LedgerOps Demo Network",
+      mode: "demo",
+      checkout_id: `ql_demo_${Date.now()}`,
+      checkout_url: `${window.location.origin}/quicklinks?demo_checkout=${Date.now()}`,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + Number(body.expires_in_days || 14) * 86400000).toISOString(),
+      remittance_available: false,
+    };
+    localStorage.setItem(scopedKey("ig_quicklinks", activeUser), JSON.stringify([link, ...storedQuickLinks(activeUser)]));
+    return link;
+  }
+  if (path.match(/^\/api\/payment-app\/quicklinks\/\d+\/verify$/) && method === "POST") {
+    const linkId = Number(path.split("/")[4]);
+    let result;
+    const links = storedQuickLinks(activeUser).map((item) => {
+      if (item.id !== linkId) return item;
+      result = { ...item, status: "paid", paid_at: new Date().toISOString(), payment_id: Date.now(), remittance_available: true };
+      return result;
+    });
+    localStorage.setItem(scopedKey("ig_quicklinks", activeUser), JSON.stringify(links));
+    if (!result) throw new Error("QuickLink not found");
+    return result;
+  }
+  if (path.match(/^\/api\/payment-app\/quicklinks\/\d+\/refund$/) && method === "POST") {
+    const linkId = Number(path.split("/")[4]);
+    let result;
+    const links = storedQuickLinks(activeUser).map((item) => {
+      if (item.id !== linkId) return item;
+      result = { ...item, status: "refunded" };
+      return result;
+    });
+    localStorage.setItem(scopedKey("ig_quicklinks", activeUser), JSON.stringify(links));
+    if (!result) throw new Error("QuickLink not found");
+    return { status: "succeeded", amount: result.amount, currency: result.currency, quicklink_status: "refunded" };
+  }
+  if (path.match(/^\/api\/payment-app\/quicklinks\/\d+$/) && method === "DELETE") {
+    const linkId = Number(path.split("/")[4]);
+    let result;
+    const links = storedQuickLinks(activeUser).map((item) => {
+      if (item.id !== linkId) return item;
+      result = { ...item, status: "disabled" };
+      return result;
+    });
+    localStorage.setItem(scopedKey("ig_quicklinks", activeUser), JSON.stringify(links));
+    if (!result) throw new Error("QuickLink not found");
+    return result;
   }
   if (path === "/api/payment-app/payment-methods" && method === "GET") return accountMethods;
   if (path === "/api/payment-app/payment-methods/setup" && method === "POST") return { mode: "manual" };
@@ -235,6 +311,9 @@ function demoResponse(path, options = {}) {
     localStorage.setItem(scopedKey("ig_demo_last_sync", activeUser), new Date().toISOString());
     return { status: "requested", request_id: `wallet_req_${Date.now()}`, payer: body.payer_name, amount: body.amount, currency: body.currency };
   }
+  if (path === "/api/payment-app/reconciliation" && method === "POST") {
+    return { id: Date.now(), status: "completed", checked_count: payments.length, matched_count: payments.length, exception_count: 0, exceptions: [], completed_at: new Date().toISOString() };
+  }
   if (path.startsWith("/api/predict/") || path === "/api/compliance/check") return { status: "completed", mode: "offline test", recommendation: "Review high-value, delayed, or volatile-currency items before settlement." };
   if (path === "/api/copilot") return seededDemo ? { answer: "Offline test mode: the riskiest invoices are pending high-value invoices in ZAR and EUR, especially INV-2026-1040 and INV-2026-1032.", state_used: { pending_invoices: 3, highest_risk_currency: "ZAR" } } : { answer: "This account does not have finance data yet. Add payments, invoices, or a payment provider to start analysis.", state_used: { pending_invoices: 0 } };
   throw new Error("Offline test data is not available for this action.");
@@ -257,13 +336,31 @@ export async function api(path, options = {}) {
   }
   if (!response.ok) {
     const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || `Request failed: ${response.status}`);
+    const message = Array.isArray(detail.detail)
+      ? detail.detail.map((item) => item.msg || String(item)).join(". ")
+      : detail.detail;
+    throw new Error(message || `Request failed: ${response.status}`);
   }
   return response.json();
 }
 
-export async function login(email, password) {
-  const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+export async function apiBlob(path, options = {}) {
+  const headers = { ...(options.headers || {}) };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    const message = Array.isArray(detail.detail)
+      ? detail.detail.map((item) => item.msg || String(item)).join(". ")
+      : detail.detail;
+    throw new Error(message || `Request failed: ${response.status}`);
+  }
+  return response.blob();
+}
+
+export async function login(email, password, otp = null) {
+  const data = await api("/api/auth/login", { method: "POST", body: JSON.stringify({ email, password, otp: otp || null }) });
   localStorage.setItem("ig_access_token", data.access_token);
   localStorage.setItem("ig_refresh_token", data.refresh_token);
   localStorage.setItem("ig_user", JSON.stringify(data.user));

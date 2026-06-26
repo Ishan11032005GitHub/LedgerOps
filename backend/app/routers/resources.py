@@ -1,12 +1,10 @@
-from collections import defaultdict
-from datetime import date, timedelta
 from fastapi import APIRouter, Depends
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 from ..account_scope import account_user_ids
 from ..auth import current_user
 from ..database import get_db
-from ..models import Alert, Customer, FXRate, Invoice, Payment, Transaction, User
+from ..models import AccountPreference, Alert, Customer, DemoWallet, FXRate, Invoice, Payment, Transaction, User
+from ..services.finance_metrics import dashboard_metrics
 
 router = APIRouter(prefix="/api", tags=["finance"])
 
@@ -78,42 +76,24 @@ def alerts(db: Session = Depends(get_db), user: User = Depends(current_user)):
 @router.get("/dashboard")
 def dashboard(db: Session = Depends(get_db), user: User = Depends(current_user)):
     scope = account_user_ids(db, user)
-    total = db.query(func.coalesce(func.sum(Payment.amount), 0)).filter(Payment.user_id.in_(scope)).scalar()
-    pending = db.query(Invoice).filter(Invoice.user_id.in_(scope), Invoice.status == "pending").count()
+    preference = db.query(AccountPreference).filter(AccountPreference.user_id == user.id).first()
+    reporting_currency = preference.currency.upper() if preference and preference.currency else "USD"
+    payments = db.query(Payment).filter(Payment.user_id.in_(scope)).order_by(Payment.received_at.asc()).all()
     transactions = db.query(Transaction).filter(Transaction.user_id.in_(scope)).order_by(Transaction.created_at.asc()).all()
     invoices = db.query(Invoice).filter(Invoice.user_id.in_(scope)).all()
-    fx = db.query(FXRate).order_by(FXRate.as_of.asc()).all() if transactions or invoices else []
+    wallets = db.query(DemoWallet).filter(DemoWallet.user_id.in_(scope)).all()
+    fx = db.query(FXRate).order_by(FXRate.as_of.asc()).all() if payments or transactions or invoices else []
     alerts = db.query(Alert).filter(Alert.user_id.in_(scope)).order_by(Alert.created_at.desc()).limit(8).all()
-
-    monthly = defaultdict(float)
-    cash = defaultdict(lambda: {"in": 0, "out": 0})
-    heat = defaultdict(float)
-    exposure = defaultdict(float)
-    anomalies = []
-    for tx in transactions:
-        key = tx.created_at.strftime("%b")
-        monthly[key] += tx.amount
-        cash[key]["in"] += tx.amount
-        heat[tx.country] += tx.amount
-        exposure[tx.currency] += tx.amount
-        if tx.risk_score > 65:
-            anomalies.append({"name": tx.counterparty, "score": tx.risk_score, "amount": tx.amount})
-    for inv in invoices:
-        if inv.status == "pending":
-            exposure[inv.currency] += inv.amount
     fx_trends = [{"date": rate.as_of.isoformat(), "currency": rate.base_currency, "rate": rate.rate, "volatility": rate.volatility_score} for rate in fx[-90:]]
-    risk_score = round(sum(a["score"] for a in anomalies) / max(len(anomalies), 1), 1)
-    runway = max(21, 82 - pending * 3)
-    return {
-        "total_volume": round(total, 2),
-        "pending_invoices": pending,
-        "cash_runway": runway,
-        "currency_exposure": dict(exposure),
-        "risk_score": risk_score,
+    metrics = dashboard_metrics(
+        payments=payments,
+        transactions=transactions,
+        invoices=invoices,
+        wallets=wallets,
+        fx_rates=fx,
+        reporting_currency=reporting_currency,
+    )
+    return metrics | {
         "alerts": [{"severity": a.severity, "category": a.category, "message": a.message} for a in alerts],
-        "monthly_transactions": [{"month": k, "volume": round(v, 2)} for k, v in monthly.items()],
-        "cash_flow": [{"month": k, "incoming": round(v["in"], 2), "expenses": round(v["in"] * 0.58, 2)} for k, v in cash.items()],
         "fx_trends": fx_trends,
-        "country_heatmap": [{"country": k, "volume": round(v, 2)} for k, v in heat.items()],
-        "anomalies": anomalies[:12],
     }

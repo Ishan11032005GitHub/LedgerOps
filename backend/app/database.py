@@ -30,6 +30,10 @@ ACCOUNT_SCOPED_TABLES = [
     "predictions",
     "compliance_checks",
     "event_logs",
+    "quick_links",
+    "refunds",
+    "reconciliation_runs",
+    "audit_logs",
 ]
 
 

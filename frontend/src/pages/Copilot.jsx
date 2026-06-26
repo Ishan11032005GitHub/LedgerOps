@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Edit3, MessageSquare, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import { api } from "../lib/api.js";
+import { accountStorageKey } from "../lib/account.js";
 
-const STORAGE_KEY = "ig_copilot_sessions";
-const ACTIVE_KEY = "ig_copilot_active_session";
+const STORAGE_KEY = `ig_copilot_sessions:${accountStorageKey()}`;
+const ACTIVE_KEY = `ig_copilot_active_session:${accountStorageKey()}`;
 
 function makeSession(title = "New finance chat") {
   return {
@@ -100,11 +101,16 @@ export default function Copilot({ embedded = false, compact = false }) {
     setQuestion("");
     setLoading(true);
     try {
-      const result = await api("/api/copilot", { method: "POST", body: JSON.stringify({ question: q }) });
+      const history = activeSession.messages.slice(-8).map(({ role, text }) => ({ role, text }));
+      const result = await api("/api/copilot", { method: "POST", body: JSON.stringify({ question: q, history }) });
       const assistantMessage = {
         id: crypto.randomUUID(),
         role: "assistant",
         text: result.answer,
+        confidence: result.confidence,
+        sources: result.sources,
+        model: result.model,
+        notice: result.notice,
         createdAt: new Date().toISOString(),
       };
       updateSession(activeSession.id, (session) => ({ ...session, messages: [...session.messages, assistantMessage] }));
@@ -141,7 +147,7 @@ export default function Copilot({ embedded = false, compact = false }) {
                 <h2 className="mt-4 text-xl font-semibold">Ask about cash, invoices, risk, or FX</h2>
                 <p className="mt-2 text-sm leading-6 text-steel">Ask follow-up questions about your finance workspace.</p>
                 <div className="mt-5 grid w-full gap-2">
-                  {["Which invoices are dangerous?", "Summarize cash runway risk", "Which customers need review?"].map((prompt) => (
+                  {["Which invoices are dangerous?", "Summarize cash runway risk", "Which clients need review?"].map((prompt) => (
                     <button key={prompt} onClick={() => setQuestion(prompt)} className="rounded-md border border-slate-200 p-3 text-left text-sm hover:bg-panel">{prompt}</button>
                   ))}
                 </div>
@@ -152,6 +158,7 @@ export default function Copilot({ embedded = false, compact = false }) {
                   <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                     <div className={`max-w-[82%] rounded-lg px-4 py-3 text-sm leading-6 ${message.role === "user" ? "bg-mint text-white" : "bg-panel text-ink"}`}>
                       {message.text}
+                      {message.role === "assistant" && <ResponseMeta message={message} />}
                     </div>
                   </div>
                 ))}
@@ -229,7 +236,7 @@ export default function Copilot({ embedded = false, compact = false }) {
               <h2 className="mt-4 text-2xl font-semibold">Ask about cash, invoices, risk, or FX</h2>
               <p className="mt-2 text-sm leading-6 text-steel">Start a session, ask follow-up questions, and rename chats as your analysis evolves.</p>
               <div className="mt-5 grid gap-2 sm:grid-cols-2">
-                {["Which invoices are dangerous?", "Summarize cash runway risk", "Which customers need review?", "Should we convert EUR now?"].map((prompt) => (
+                {["Which invoices are dangerous?", "Summarize cash runway risk", "Which clients need review?", "Should we convert EUR now?"].map((prompt) => (
                   <button key={prompt} onClick={() => setQuestion(prompt)} className="rounded-md border border-slate-200 p-3 text-left text-sm hover:bg-panel">{prompt}</button>
                 ))}
               </div>
@@ -240,6 +247,7 @@ export default function Copilot({ embedded = false, compact = false }) {
                 <div key={message.id} className={`flex ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                   <div className={`max-w-[78%] rounded-lg px-4 py-3 text-sm leading-6 ${message.role === "user" ? "bg-mint text-white" : "bg-panel text-ink"}`}>
                     {message.text}
+                    {message.role === "assistant" && <ResponseMeta message={message} />}
                   </div>
                 </div>
               ))}
@@ -262,4 +270,16 @@ export default function Copilot({ embedded = false, compact = false }) {
 function titleFromQuestion(question) {
   const cleaned = question.replace(/[?!.]+$/, "").trim();
   return cleaned.length > 42 ? `${cleaned.slice(0, 39)}...` : cleaned || "New finance chat";
+}
+
+function ResponseMeta({ message }) {
+  if (!message.confidence && !message.sources?.length && !message.notice) return null;
+  return (
+    <div className="mt-3 border-t border-slate-200 pt-2 text-[11px] leading-5 text-steel">
+      {message.confidence && <div><span className="font-medium text-ink">Confidence:</span> {message.confidence}</div>}
+      {message.model && <div><span className="font-medium text-ink">Model:</span> {message.model}</div>}
+      {!!message.sources?.length && <div><span className="font-medium text-ink">Account data:</span> {message.sources.join(", ")}</div>}
+      {message.notice && <div className="mt-1">{message.notice}</div>}
+    </div>
+  );
 }

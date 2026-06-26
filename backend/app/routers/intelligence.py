@@ -1,4 +1,7 @@
 import httpx
+import json
+from collections import defaultdict
+from datetime import date
 from fastapi import APIRouter, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -6,9 +9,10 @@ from ..account_scope import account_user_ids
 from ..auth import current_user, require_roles
 from ..config import get_settings
 from ..database import get_db
-from ..models import ComplianceCheck, Customer, DemoWallet, FXRate, Invoice, Payment, Prediction, Role, Transaction, User
+from ..models import AccountPreference, Alert, ComplianceCheck, Customer, DemoWallet, FXRate, Invoice, Payment, PaymentMethod, Prediction, Role, Transaction, User
 from ..schemas import ComplianceIn, CopilotIn, PredictionProxyIn
 from ..services.compliance import evaluate_compliance
+from ..services.gemini import generate_finance_answer
 
 router = APIRouter(prefix="/api", tags=["intelligence"])
 
@@ -22,13 +26,29 @@ def insufficient(reason: str, required: list[str], observed: dict) -> dict:
     }
 
 
+def confidence_from_sample(sample_count: int, medium_at: int, high_at: int) -> str:
+    if sample_count >= high_at:
+        return "High"
+    if sample_count >= medium_at:
+        return "Medium"
+    return "Low"
+
+
+def account_currency(db: Session, user: User) -> str:
+    preference = db.query(AccountPreference).filter(AccountPreference.user_id == user.id).first()
+    if preference and preference.currency:
+        return preference.currency.upper()
+    wallet = db.query(DemoWallet).filter(DemoWallet.user_id == user.id).first()
+    return wallet.currency.upper() if wallet and wallet.currency else "USD"
+
+
 @router.post("/compliance/check", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
 def compliance_check(payload: ComplianceIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     result = evaluate_compliance(payload.model_dump())
     check = ComplianceCheck(user_id=user.id, entity_type=payload.entity_type, entity_id=payload.entity_id, score=result["score"], status=result["status"], recommendations=result["recommendations"])
     db.add(check)
     db.commit()
-    return result | {"check_id": check.id}
+    return result | {"check_id": check.id, "confidence": "Medium"}
 
 
 @router.post("/compliance/current", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
@@ -72,6 +92,7 @@ def current_compliance_check(db: Session = Depends(get_db), user: User = Depends
     db.commit()
     return result | {
         "check_id": check.id,
+        "confidence": "High" if invoice and "kyc" in [str(item).lower() for item in documents] else "Medium" if invoice or documents else "Low",
         "data_status": "ready",
         "source": {"transaction_id": tx.id, "counterparty": tx.counterparty},
     }
@@ -98,6 +119,8 @@ async def payment_delay(payload: PredictionProxyIn, db: Session = Depends(get_db
         "days_until_due": (invoice.due_date - invoice.issued_at).days,
     } if invoice and customer else {})
     result = await call_ml("/predict/payment-delay", body)
+    history_count = customer.delayed_invoice_count + 1 if customer else 0
+    result["confidence"] = confidence_from_sample(history_count, 3, 8)
     db.add(Prediction(user_id=user.id, prediction_type="payment-delay", entity_type="invoice", entity_id=payload.invoice_id, score=result["delay_risk"], output=result))
     db.commit()
     return result
@@ -106,6 +129,7 @@ async def payment_delay(payload: PredictionProxyIn, db: Session = Depends(get_db
 @router.post("/predict/fx")
 async def fx_prediction(payload: PredictionProxyIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     scope = account_user_ids(db, user)
+    native_currency = account_currency(db, user)
     invoice_exposure = (
         db.query(Invoice.currency, func.sum(Invoice.amount))
         .filter(Invoice.user_id.in_(scope), Invoice.status == "pending")
@@ -121,14 +145,15 @@ async def fx_prediction(payload: PredictionProxyIn, db: Session = Depends(get_db
     exposure: dict[str, float] = {}
     for currency, amount in [*invoice_exposure, *transaction_exposure]:
         exposure[currency] = exposure.get(currency, 0) + float(amount or 0)
-    if not exposure:
+    foreign_exposure = {currency: amount for currency, amount in exposure.items() if currency.upper() != native_currency}
+    if not foreign_exposure:
         return insufficient(
-            "No currency exposure exists for this account yet.",
-            ["A payment, transaction, or open invoice with a currency"],
-            {"currencies": 0},
+            f"No foreign-currency exposure exists relative to the account's {native_currency} reporting currency.",
+            ["A payment, transaction, or open invoice in a currency different from the reporting currency"],
+            {"native_currency": native_currency, "foreign_currencies": 0},
         )
 
-    currency = max(exposure, key=exposure.get)
+    currency = max(foreign_exposure, key=foreign_exposure.get)
     rates = (
         db.query(FXRate)
         .filter(FXRate.base_currency == currency)
@@ -140,7 +165,7 @@ async def fx_prediction(payload: PredictionProxyIn, db: Session = Depends(get_db
         return insufficient(
             f"Not enough market-rate history is available for {currency}.",
             ["At least 3 market-rate observations"],
-            {"currency": currency, "rate_observations": len(rates), "exposure": exposure[currency]},
+            {"currency": currency, "native_currency": native_currency, "rate_observations": len(rates), "exposure": foreign_exposure[currency]},
         )
 
     body = {
@@ -156,11 +181,17 @@ async def fx_prediction(payload: PredictionProxyIn, db: Session = Depends(get_db
         ],
     }
     result = await call_ml("/predict/fx", body)
+    result["confidence"] = confidence_from_sample(len(rates), 8, 20)
     db.add(Prediction(user_id=user.id, prediction_type="fx", entity_type="currency", entity_id=None, score=result.get("volatility_score", 50), output=result))
     db.commit()
     return result | {
         "data_status": "ready",
-        "source": {"currency": currency, "exposure": round(exposure[currency], 2), "rate_observations": len(rates)},
+        "source": {
+            "currency": currency,
+            "native_currency": native_currency,
+            "exposure": round(foreign_exposure[currency], 2),
+            "rate_observations": len(rates),
+        },
     }
 
 
@@ -206,6 +237,7 @@ async def anomaly(payload: PredictionProxyIn, db: Session = Depends(get_db), use
     result = peak | {
         "average_score": batch["average_score"],
         "flagged_count": batch["flagged_count"],
+        "confidence": confidence_from_sample(len(transactions), 10, 30),
     }
     db.add(Prediction(user_id=user.id, prediction_type="anomaly", entity_type="transaction", entity_id=peak_tx.id, score=result["anomaly_score"], output=result))
     db.commit()
@@ -257,6 +289,9 @@ async def runway(payload: PredictionProxyIn, db: Session = Depends(get_db), user
         "current_cash": current_cash,
     }
     result = await call_ml("/predict/runway", body)
+    observation_days = max((newest - oldest).days, 0)
+    sample_count = len(incoming) + len(outgoing)
+    result["confidence"] = "High" if sample_count >= 20 and observation_days >= 90 else "Medium" if sample_count >= 6 and observation_days >= 30 else "Low"
     db.add(Prediction(user_id=user.id, prediction_type="runway", entity_type="company", entity_id=None, score=result["projected_days"], output=result))
     db.commit()
     return result | {
@@ -267,30 +302,294 @@ async def runway(payload: PredictionProxyIn, db: Session = Depends(get_db), user
             "pending_invoices": len(invoices),
             "current_cash": round(current_cash, 2),
             "observed_monthly_outgoing": round(monthly_outgoing, 2),
+            "observation_days": observation_days,
         },
     }
 
 
-@router.post("/copilot")
-def copilot(payload: CopilotIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
-    q = payload.question.lower()
-    scope = account_user_ids(db, user)
-    pending = db.query(Invoice).filter(Invoice.user_id.in_(scope), Invoice.status == "pending").all()
-    risky_customers = db.query(Customer).filter(Customer.user_id.in_(scope), Customer.risk_rating.in_(["Medium", "High"])).all()
-    recent_predictions = db.query(Prediction).filter(Prediction.user_id.in_(scope)).order_by(Prediction.created_at.desc()).limit(8).all()
-    exposure = {}
-    for invoice in pending:
-        exposure[invoice.currency] = exposure.get(invoice.currency, 0) + invoice.amount
+def money_label(amount: float, currency: str) -> str:
+    return f"{currency} {amount:,.2f}"
 
-    if "usd" in q or "conversion" in q or "fx" in q:
-        answer = f"USD conversion can be staged. Current open exposure is {exposure or 'not available yet for this account'}. Recent FX intelligence favors partial conversion when volatility is above 55, so avoid an all-at-once conversion unless payroll timing requires it."
-    elif "cash" in q or "runway" in q:
-        from datetime import date
-        overdue = sum(1 for i in pending if i.due_date < date.today())
-        answer = f"Cash flow risk is medium: {len(pending)} invoices are pending and {overdue} are overdue. The most useful action is accelerating high-value receivables before new discretionary spend."
-    elif "dangerous" in q or "risky" in q or "invoices" in q:
-        top = sorted(pending, key=lambda i: i.amount, reverse=True)[:3]
-        answer = "No invoices are available for this account yet." if not top else "Highest attention invoices: " + ", ".join(f"{i.invoice_number} {i.currency} {i.amount:,.0f} in {i.country}" for i in top)
+
+def finance_snapshot(db: Session, user: User) -> dict:
+    scope = account_user_ids(db, user)
+    native_currency = account_currency(db, user)
+    transactions = db.query(Transaction).filter(Transaction.user_id.in_(scope)).order_by(Transaction.created_at.desc()).limit(250).all()
+    payments = db.query(Payment).filter(Payment.user_id.in_(scope)).order_by(Payment.received_at.desc()).limit(150).all()
+    invoices = db.query(Invoice).filter(Invoice.user_id.in_(scope)).order_by(Invoice.due_date.asc()).limit(150).all()
+    customers = db.query(Customer).filter(Customer.user_id.in_(scope)).order_by(Customer.name.asc()).all()
+    alerts = db.query(Alert).filter(Alert.user_id.in_(scope), Alert.is_resolved.is_(False)).order_by(Alert.created_at.desc()).limit(20).all()
+    predictions = db.query(Prediction).filter(Prediction.user_id.in_(scope)).order_by(Prediction.created_at.desc()).limit(12).all()
+    wallets = db.query(DemoWallet).filter(DemoWallet.user_id.in_(scope)).all()
+    methods = db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).order_by(PaymentMethod.is_default.desc()).all()
+
+    inflow_by_currency: dict[str, float] = defaultdict(float)
+    outflow_by_currency: dict[str, float] = defaultdict(float)
+    counterparty_totals: dict[str, float] = defaultdict(float)
+    for tx in transactions:
+        target = inflow_by_currency if tx.type == "inbound" else outflow_by_currency
+        target[tx.currency] += tx.amount
+        counterparty_totals[tx.counterparty] += tx.amount
+
+    pending = [invoice for invoice in invoices if invoice.status == "pending"]
+    overdue = [invoice for invoice in pending if invoice.due_date < date.today()]
+    pending_by_currency: dict[str, float] = defaultdict(float)
+    for invoice in pending:
+        pending_by_currency[invoice.currency] += invoice.amount
+
+    verified_statuses = {"verified", "demo verified", "approved", "clear"}
+    risky_customers = [
+        customer
+        for customer in customers
+        if customer.risk_rating in {"Medium", "High"}
+        or customer.kyc_status.strip().lower() not in verified_statuses
+    ]
+    wallet_balances = [{"currency": wallet.currency, "amount": wallet.balance_minor / 100} for wallet in wallets]
+    top_counterparties = sorted(counterparty_totals.items(), key=lambda item: item[1], reverse=True)[:5]
+
+    return {
+        "account": {
+            "name": user.name,
+            "email": user.email,
+            "account_type": user.account_type,
+            "workspace": user.workspace_name,
+            "role": user.role.value,
+            "reporting_currency": native_currency,
+        },
+        "balances": wallet_balances,
+        "transactions": {
+            "count": len(transactions),
+            "inflow_by_currency": dict(inflow_by_currency),
+            "outflow_by_currency": dict(outflow_by_currency),
+            "recent": [
+                {
+                    "id": tx.id,
+                    "type": tx.type,
+                    "amount": tx.amount,
+                    "currency": tx.currency,
+                    "counterparty": tx.counterparty,
+                    "country": tx.country,
+                    "risk_score": tx.risk_score,
+                    "created_at": tx.created_at.isoformat(),
+                }
+                for tx in transactions[:12]
+            ],
+        },
+        "payments": {
+            "count": len(payments),
+            "settled_count": sum(payment.status == "settled" for payment in payments),
+            "processing_count": sum(payment.status == "processing" for payment in payments),
+        },
+        "invoices": {
+            "count": len(invoices),
+            "pending_count": len(pending),
+            "overdue_count": len(overdue),
+            "pending_by_currency": dict(pending_by_currency),
+            "largest_pending": [
+                {
+                    "invoice_number": invoice.invoice_number,
+                    "amount": invoice.amount,
+                    "currency": invoice.currency,
+                    "due_date": invoice.due_date.isoformat(),
+                    "country": invoice.country,
+                }
+                for invoice in sorted(pending, key=lambda item: item.amount, reverse=True)[:5]
+            ],
+            "pending_items": [
+                {
+                    "invoice_number": invoice.invoice_number,
+                    "amount": invoice.amount,
+                    "currency": invoice.currency,
+                    "due_date": invoice.due_date.isoformat(),
+                    "country": invoice.country,
+                }
+                for invoice in pending[:30]
+            ],
+        },
+        "customers": {
+            "count": len(customers),
+            "requiring_review": [
+                {
+                    "name": customer.name,
+                    "risk_rating": customer.risk_rating,
+                    "kyc_status": customer.kyc_status,
+                    "avg_delay_days": customer.avg_delay_days,
+                    "delayed_invoice_count": customer.delayed_invoice_count,
+                }
+                for customer in risky_customers[:10]
+            ],
+        },
+        "alerts": [
+            {"severity": alert.severity, "category": alert.category, "message": alert.message}
+            for alert in alerts
+        ],
+        "recent_predictions": [
+            {"type": prediction.prediction_type, "score": prediction.score, "output": prediction.output}
+            for prediction in predictions
+        ],
+        "payment_methods": [
+            {"label": method.label, "brand": method.brand, "last_four": method.last_four, "is_default": method.is_default}
+            for method in methods
+        ],
+        "top_counterparties": [{"name": name, "gross_activity": amount} for name, amount in top_counterparties],
+    }
+
+
+def snapshot_confidence(snapshot: dict) -> str:
+    count = snapshot["transactions"]["count"]
+    if count >= 30:
+        return "High"
+    if count >= 10:
+        return "Medium"
+    return "Low"
+
+
+def prompt_attack_detected(question: str) -> bool:
+    normalized = question.lower()
+    markers = [
+        "ignore previous",
+        "ignore all instructions",
+        "system prompt",
+        "developer message",
+        "reveal your prompt",
+        "show hidden instructions",
+        "api key",
+        "secret key",
+        "authentication token",
+    ]
+    return any(marker in normalized for marker in markers)
+
+
+def summarize_amounts(values: dict[str, float]) -> str:
+    if not values:
+        return "none recorded"
+    return ", ".join(money_label(amount, currency) for currency, amount in sorted(values.items()))
+
+
+def copilot_answer(question: str, snapshot: dict, history: list[dict]) -> tuple[str, list[str]]:
+    q = question.lower()
+    previous = next((item.get("text", "") for item in reversed(history) if item.get("role") == "user"), "")
+    if previous and any(marker in q for marker in ["what about", "and ", "also", "that", "those", "it?"]):
+        q = f"{previous.lower()} {q}"
+    account = snapshot["account"]
+    transactions = snapshot["transactions"]
+    invoices = snapshot["invoices"]
+    customers = snapshot["customers"]
+    sources = []
+
+    if any(term in q for term in ["balance", "cash available", "how much money"]):
+        sources.append("account balances")
+        balances = snapshot["balances"]
+        answer = "Available balances: " + (", ".join(money_label(item["amount"], item["currency"]) for item in balances) if balances else "no linked balance is available yet.")
+    elif any(term in q for term in ["spend", "spent", "expense", "outflow", "paid out"]):
+        sources.extend(["transaction ledger", "outbound transactions"])
+        answer = f"Recorded outflows are {summarize_amounts(transactions['outflow_by_currency'])}. This is based on {transactions['count']} recent ledger transactions; use category-level expense data before making a budget cut."
+    elif any(term in q for term in ["income", "revenue", "inflow", "received"]):
+        sources.extend(["transaction ledger", "inbound transactions"])
+        answer = f"Recorded inflows are {summarize_amounts(transactions['inflow_by_currency'])}. Treat this as cash received, not accounting revenue, unless the underlying payments have been reconciled."
+    elif any(term in q for term in ["invoice", "receivable", "collect", "overdue", "dangerous"]):
+        sources.append("invoice ledger")
+        requested_currency = next((currency for currency in invoices["pending_by_currency"] if currency.lower() in q), None)
+        candidates = [item for item in invoices["pending_items"] if not requested_currency or item["currency"] == requested_currency]
+        largest = sorted(candidates, key=lambda item: item["amount"], reverse=True)[:5]
+        detail = "; ".join(f"{item['invoice_number']} for {money_label(item['amount'], item['currency'])}, due {item['due_date']}" for item in largest)
+        scope_label = f" in {requested_currency}" if requested_currency else ""
+        answer = f"There are {invoices['pending_count']} pending invoices and {invoices['overdue_count']} overdue{scope_label}. " + (f"Highest-value items{scope_label}: {detail}." if detail else f"No open receivables{scope_label} are recorded.")
+    elif any(term in q for term in ["customer", "payer", "kyc", "review"]):
+        sources.append("customer risk records")
+        review = customers["requiring_review"]
+        detail = "; ".join(f"{item['name']} ({item['risk_rating']} risk, KYC {item['kyc_status']}, average delay {item['avg_delay_days']} days)" for item in review[:5])
+        answer = f"{len(review)} customers currently need attention. " + (detail if detail else "No customer review flags are recorded.")
+    elif any(term in q for term in ["fraud", "anomaly", "suspicious", "risk"]):
+        sources.extend(["transaction risk scores", "recent intelligence outputs", "open alerts"])
+        anomaly = next((item for item in snapshot["recent_predictions"] if item["type"] == "anomaly"), None)
+        alert_text = "; ".join(item["message"] for item in snapshot["alerts"][:3])
+        if anomaly:
+            output = anomaly["output"]
+            answer = f"The latest anomaly analysis scored {output.get('anomaly_score', anomaly['score'])}/100 with {output.get('flagged_count', 0)} flagged transactions. {alert_text or 'No unresolved risk alerts are recorded.'}"
+        else:
+            answer = f"No completed anomaly analysis is stored yet. {alert_text or 'No unresolved risk alerts are recorded.'}"
+    elif any(term in q for term in ["fx", "currency", "convert", "exchange"]):
+        sources.extend(["reporting currency", "open invoice exposure", "recent FX intelligence"])
+        foreign = {currency: amount for currency, amount in invoices["pending_by_currency"].items() if currency != account["reporting_currency"]}
+        prediction = next((item for item in snapshot["recent_predictions"] if item["type"] == "fx"), None)
+        recommendation = prediction["output"].get("recommendation") if prediction else None
+        answer = f"The reporting currency is {account['reporting_currency']}. Open foreign-currency receivables are {summarize_amounts(foreign)}. " + (f"Latest staged-conversion guidance: {recommendation}." if recommendation else "Run FX Intelligence after rate history is available before converting.")
+    elif any(term in q for term in ["runway", "survive", "burn", "cash flow"]):
+        sources.extend(["account balances", "inflows and outflows", "runway intelligence"])
+        prediction = next((item for item in snapshot["recent_predictions"] if item["type"] == "runway"), None)
+        if prediction:
+            output = prediction["output"]
+            answer = f"The latest runway estimate is {output.get('projected_days', prediction['score'])} days with {output.get('risk', 'unclassified')} risk and {output.get('confidence', 'Low')} confidence. Recalculate after material payments or expenses."
+        else:
+            answer = "No runway result is stored yet. LedgerOps needs both incoming and outgoing transaction history before it can produce one."
+    elif any(term in q for term in ["payment", "settlement", "processing"]):
+        sources.append("payment ledger")
+        payment_data = snapshot["payments"]
+        answer = f"The account has {payment_data['count']} recent payments: {payment_data['settled_count']} settled and {payment_data['processing_count']} processing."
+    elif any(term in q for term in ["what should", "recommend", "priority", "priorities", "next action", "help me"]):
+        sources.extend(["invoices", "customers", "alerts", "cash activity"])
+        actions = []
+        if invoices["overdue_count"]:
+            actions.append(f"collect {invoices['overdue_count']} overdue invoices")
+        if customers["requiring_review"]:
+            actions.append(f"review {len(customers['requiring_review'])} customer risk/KYC records")
+        if snapshot["alerts"]:
+            actions.append(f"resolve {len(snapshot['alerts'])} open alerts")
+        if not transactions["outflow_by_currency"]:
+            actions.append("connect or record outgoing expenses so runway becomes reliable")
+        answer = "Highest-priority actions: " + ("; ".join(actions) if actions else "no urgent account-data issue is visible; review cash allocation and upcoming obligations.")
     else:
-        answer = f"I checked live system state: {len(pending)} pending invoices, {len(risky_customers)} medium/high-risk customers, and {len(recent_predictions)} recent model outputs. Ask about FX, runway, or risky invoices for a tighter recommendation."
-    return {"answer": answer, "state_used": {"pending_invoices": len(pending), "currency_exposure": exposure, "recent_predictions": [p.output for p in recent_predictions[:3]]}}
+        sources.extend(["account snapshot", "payments", "invoices", "customers", "alerts"])
+        follow_up = f" I also considered your previous question: “{previous[:120]}”." if previous else ""
+        answer = (
+            f"I reviewed {account['workspace'] or account['name']}: {transactions['count']} transactions, "
+            f"{invoices['pending_count']} pending invoices, {invoices['overdue_count']} overdue invoices, "
+            f"{len(customers['requiring_review'])} customer review items, and {len(snapshot['alerts'])} open alerts."
+            f"{follow_up} Ask for balances, spending, collections, FX, runway, fraud, compliance, customers, or priorities."
+        )
+    return answer, sources
+
+
+@router.post("/copilot")
+async def copilot(payload: CopilotIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    snapshot = finance_snapshot(db, user)
+    confidence = snapshot_confidence(snapshot)
+    fallback_answer, fallback_sources = copilot_answer(payload.question, snapshot, payload.history[-8:])
+    if prompt_attack_detected(payload.question):
+        return {
+            "answer": "I cannot reveal hidden instructions, credentials, or authentication data. I can still help with the financial records available in this workspace.",
+            "confidence": confidence,
+            "sources": ["workspace security policy"],
+            "model": "LedgerOps safety policy",
+            "as_of": date.today().isoformat(),
+            "state_used": {},
+            "notice": "No account secrets or hidden instructions were disclosed.",
+        }
+    provider = "LedgerOps grounded fallback"
+    answer = fallback_answer
+    sources = fallback_sources
+    try:
+        generated = await generate_finance_answer(payload.question, snapshot, payload.history[-8:], confidence)
+        if generated:
+            answer = generated["answer"]
+            sources = fallback_sources
+            provider = generated["model"]
+    except (httpx.HTTPError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        pass
+    return {
+        "answer": answer,
+        "confidence": confidence,
+        "sources": sources,
+        "model": provider,
+        "as_of": date.today().isoformat(),
+        "state_used": {
+            "reporting_currency": snapshot["account"]["reporting_currency"],
+            "transaction_count": snapshot["transactions"]["count"],
+            "pending_invoices": snapshot["invoices"]["pending_count"],
+            "overdue_invoices": snapshot["invoices"]["overdue_count"],
+            "customer_review_items": len(snapshot["customers"]["requiring_review"]),
+            "open_alerts": len(snapshot["alerts"]),
+        },
+        "notice": "Operational guidance based on LedgerOps account data. Confirm material tax, legal, investment, lending, and regulatory decisions with a qualified professional.",
+    }

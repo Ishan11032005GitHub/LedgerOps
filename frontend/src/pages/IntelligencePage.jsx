@@ -144,7 +144,7 @@ function buildView(mode, result) {
       primaryValue: score(result.volatility_score, 50),
       risk,
       tone: toneFromRisk(risk),
-      confidence: "Medium",
+      confidence: result.confidence || "Medium",
       recommendation: result.recommendation || "Stage conversion and review the position within 48 hours.",
       signals: [
         `Trend is ${result.trend || "under review"}.`,
@@ -163,7 +163,7 @@ function buildView(mode, result) {
       primaryValue: `${anomaly}/100`,
       risk,
       tone: toneFromRisk(risk),
-      confidence: "Model-assisted",
+      confidence: result.confidence || "Medium",
       recommendation: anomaly >= 70 ? "Hold for manual verification before settlement." : "Continue monitoring and verify supporting details if needed.",
       signals: [
         ...(result.reasons || ["No unusual payment signals were returned."]),
@@ -182,7 +182,7 @@ function buildView(mode, result) {
       primaryValue: `${days} days`,
       risk,
       tone: toneFromRisk(risk),
-      confidence: "Forecast",
+      confidence: result.confidence || "Low",
       recommendation: days < 60 ? "Accelerate high-value receivables and pause discretionary spend." : "Runway is acceptable; continue monitoring invoice delays.",
       signals: [
         `Forecast method: ${result.method || "cash-flow model"}.`,
@@ -199,7 +199,7 @@ function buildView(mode, result) {
     primaryValue: `${score(result.score, 0)}/100`,
     risk: complianceRisk,
     tone: toneFromRisk(complianceRisk),
-    confidence: "Rule-assisted",
+    confidence: result.confidence || "Medium",
     recommendation: result.status === "pass" ? "No material compliance gaps detected." : "Resolve required review items before final settlement.",
     signals: [
       ...(result.recommendations || ["No material compliance gaps detected."]),

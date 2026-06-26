@@ -6,7 +6,7 @@ from dataclasses import dataclass
 import httpx
 from fastapi import HTTPException, Request
 from ..config import get_settings
-from ..models import Customer, Invoice, User
+from ..models import Customer, Invoice, QuickLink, User
 
 
 @dataclass
@@ -47,31 +47,37 @@ def provider_status() -> dict:
     if settings.demo_only:
         return {
             "provider": "LedgerOps Demo Network",
+            "processor": "demo",
             "mode": "demo",
             "connected": False,
             "webhook_configured": False,
             "real_payments_enabled": False,
+            "issuer_agnostic": True,
+            "card_networks": ["Visa", "Mastercard", "RuPay (demo)"],
         }
     mode = stripe_mode()
     stripe_enabled = mode in {"test", "live"}
     webhook_configured = settings.stripe_webhook_secret.startswith("whsec_")
     return {
-        "provider": "Stripe" if stripe_enabled else ("Demo wallet provider" if settings.payment_provider_mode == "demo" else "Not configured"),
+        "provider": "Card processor" if stripe_enabled else ("Demo card network" if settings.payment_provider_mode == "demo" else "Not configured"),
+        "processor": settings.payment_processor if stripe_enabled else settings.payment_provider_mode,
         "mode": f"stripe_{mode}" if stripe_enabled else settings.payment_provider_mode,
         "connected": stripe_enabled,
         "webhook_configured": webhook_configured,
         "real_payments_enabled": mode == "live" and webhook_configured,
+        "issuer_agnostic": True,
+        "card_networks": ["Visa", "Mastercard", "American Express", "JCB", "Discover", "Diners Club", "UnionPay"],
     }
 
 
 async def create_checkout_link(invoice: Invoice, customer: Customer | None, user: User, customer_email: str | None = None, success_url: str | None = None) -> CheckoutLink:
     settings = get_settings()
     if not settings.stripe_secret_key:
-        if settings.payment_provider_mode != "demo":
+        if not settings.demo_only and settings.payment_provider_mode != "demo":
             raise HTTPException(status_code=503, detail="Payment provider is not configured")
         checkout_id = f"ig_chk_{invoice.id}_{int(time.time())}"
         return CheckoutLink(
-            provider="Demo wallet provider",
+            provider="Demo card network",
             mode="demo",
             checkout_id=checkout_id,
             checkout_url=f"{settings.frontend_url}/payment-app?checkout={checkout_id}",
@@ -110,11 +116,67 @@ async def create_checkout_link(invoice: Invoice, customer: Customer | None, user
             headers={"Idempotency-Key": f"ledgerops-invoice-{invoice.id}-{invoice.invoice_number}"},
         )
     if response.status_code >= 400:
-        detail = response.json().get("error", {}).get("message", "Stripe checkout session failed")
+        detail = response.json().get("error", {}).get("message", "Card checkout session failed")
         raise HTTPException(status_code=502, detail=detail)
     payload = response.json()
     return CheckoutLink(
-        provider="Stripe",
+        provider="Card processor",
+        mode=f"stripe_{mode}",
+        checkout_id=payload["id"],
+        checkout_url=payload["url"],
+        raw=payload,
+    )
+
+
+async def create_quicklink_checkout(quick_link: QuickLink, user: User) -> CheckoutLink:
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        if not settings.demo_only and settings.payment_provider_mode != "demo":
+            raise HTTPException(status_code=503, detail="Payment provider is not configured")
+        checkout_id = f"ql_demo_{quick_link.public_id}"
+        return CheckoutLink(
+            provider="LedgerOps Demo Network",
+            mode="demo",
+            checkout_id=checkout_id,
+            checkout_url=f"{settings.frontend_url}/pay/{quick_link.public_id}",
+            raw={"demo": True},
+        )
+
+    settings, mode = require_stripe(require_webhook=True)
+    data = {
+        "mode": "payment",
+        "payment_method_types[0]": "card",
+        "success_url": f"{settings.frontend_url}/quicklinks?checkout=success&quicklink={quick_link.public_id}",
+        "cancel_url": f"{settings.frontend_url}/quicklinks?checkout=cancelled&quicklink={quick_link.public_id}",
+        "client_reference_id": quick_link.public_id,
+        "metadata[quicklink_id]": str(quick_link.id),
+        "metadata[quicklink_public_id]": quick_link.public_id,
+        "metadata[ledgerops_user_id]": str(quick_link.user_id),
+        "metadata[created_by_user_id]": str(user.id),
+        "metadata[customer_name]": quick_link.payer_name or "QuickLink payer",
+        "metadata[purpose_code]": quick_link.purpose_code,
+        "line_items[0][quantity]": "1",
+        "line_items[0][price_data][currency]": quick_link.currency.lower(),
+        "line_items[0][price_data][unit_amount]": str(int(round(quick_link.amount * 100))),
+        "line_items[0][price_data][product_data][name]": quick_link.title,
+        "line_items[0][price_data][product_data][description]": f"LedgerOps QuickLink | Purpose: {quick_link.purpose_code}",
+    }
+    if quick_link.payer_email:
+        data["customer_email"] = quick_link.payer_email
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(
+            "https://api.stripe.com/v1/checkout/sessions",
+            data=data,
+            auth=(settings.stripe_secret_key, ""),
+            headers={"Idempotency-Key": f"ledgerops-quicklink-{quick_link.public_id}"},
+        )
+    if response.status_code >= 400:
+        detail = response.json().get("error", {}).get("message", "QuickLink checkout session failed")
+        raise HTTPException(status_code=502, detail=detail)
+    payload = response.json()
+    return CheckoutLink(
+        provider="Card processor",
         mode=f"stripe_{mode}",
         checkout_id=payload["id"],
         checkout_url=payload["url"],
@@ -125,7 +187,7 @@ async def create_checkout_link(invoice: Invoice, customer: Customer | None, user
 async def retrieve_checkout_session(checkout_id: str) -> dict:
     settings = get_settings()
     if not settings.stripe_secret_key:
-        if settings.payment_provider_mode != "demo":
+        if not settings.demo_only and settings.payment_provider_mode != "demo":
             raise HTTPException(status_code=503, detail="Payment provider is not configured")
         return {
             "id": checkout_id,
@@ -144,7 +206,7 @@ async def retrieve_checkout_session(checkout_id: str) -> dict:
             auth=(settings.stripe_secret_key, ""),
         )
     if response.status_code >= 400:
-        detail = response.json().get("error", {}).get("message", "Stripe checkout session lookup failed")
+        detail = response.json().get("error", {}).get("message", "Card checkout session lookup failed")
         raise HTTPException(status_code=502, detail=detail)
     return response.json()
 
@@ -182,7 +244,7 @@ async def create_card_setup_session(user: User) -> CheckoutLink | None:
         detail = session_response.json().get("error", {}).get("message", "Card setup session failed")
         raise HTTPException(status_code=502, detail=detail)
     payload = session_response.json()
-    return CheckoutLink(provider="Stripe", mode=f"stripe_{mode}", checkout_id=payload["id"], checkout_url=payload["url"], raw=payload)
+    return CheckoutLink(provider="Card processor", mode=f"stripe_{mode}", checkout_id=payload["id"], checkout_url=payload["url"], raw=payload)
 
 
 async def retrieve_card_setup_session(checkout_id: str) -> dict:

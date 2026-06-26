@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { CircleDollarSign, Gauge, LineChart, LogOut, PlugZap, Receipt, SearchCheck, Settings, ShieldAlert, Users, WalletCards } from "lucide-react";
+import { CircleDollarSign, Flag, Gauge, LineChart, Link2, LogOut, PlugZap, Receipt, SearchCheck, Settings, ShieldAlert, Users, WalletCards } from "lucide-react";
 import { accountCommandTitle, accountSubtitle, readStoredUser } from "../lib/account.js";
 import FloatingCopilot from "./FloatingCopilot.jsx";
-import { prefetchDashboard } from "../pages/Dashboard.jsx";
-import { prefetchDataPage } from "../pages/DataPage.jsx";
 
 const nav = [
-  ["Dashboard", "/", Gauge, prefetchDashboard],
-  ["Payments", "/payments", CircleDollarSign, () => prefetchDataPage("payments")],
+  ["Dashboard", "/", Gauge, () => import("../pages/Dashboard.jsx").then((module) => module.prefetchDashboard())],
+  ["Payments", "/payments", CircleDollarSign, () => import("../pages/DataPage.jsx").then((module) => module.prefetchDataPage("payments"))],
   ["Payment App", "/payment-app", PlugZap],
-  ["Invoices", "/invoices", Receipt, () => prefetchDataPage("invoices")],
-  ["Customers", "/customers", Users, () => prefetchDataPage("customers")],
+  ["QuickLinks", "/quicklinks", Link2],
+  ["Invoices", "/invoices", Receipt, () => import("../pages/DataPage.jsx").then((module) => module.prefetchDataPage("invoices"))],
+  ["Clients", "/clients", Users, () => import("../pages/DataPage.jsx").then((module) => module.prefetchDataPage("customers"))],
+  ["Country Codes", "/country-codes", Flag],
   ["FX Intelligence", "/fx", LineChart],
   ["Fraud Detection", "/fraud", ShieldAlert],
   ["Cash Forecast", "/cash", WalletCards],
@@ -38,6 +38,14 @@ export default function Layout() {
   }, [location.pathname]);
 
   function logout() {
+    const refreshToken = localStorage.getItem("ig_refresh_token");
+    if (refreshToken) {
+      fetch(`${import.meta.env.VITE_API_URL || "http://localhost:8000"}/api/auth/logout`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+      }).catch(() => {});
+    }
     localStorage.clear();
     navigate("/login");
   }

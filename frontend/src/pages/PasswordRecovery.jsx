@@ -56,9 +56,9 @@ export default function PasswordRecovery({ mode = "request", insideAccount = fal
             {isReset ? (
               <>
                 <label className="block text-sm font-medium">New password</label>
-                <input required minLength={8} type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 outline-none focus:border-mint" />
+                <input required minLength={10} type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 outline-none focus:border-mint" />
                 <label className="mt-4 block text-sm font-medium">Confirm new password</label>
-                <input required minLength={8} type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 outline-none focus:border-mint" />
+                <input required minLength={10} type="password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2.5 outline-none focus:border-mint" />
               </>
             ) : (
               <>

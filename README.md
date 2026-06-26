@@ -2,7 +2,7 @@
 
 AI finance operations layer for cross-border SMB payments.
 
-LedgerOps is a full-stack finance operations system with Stripe Checkout collection, signed webhooks, fraud detection, FX recommendations, cash forecasting, compliance scoring, and a state-aware AI finance copilot.
+LedgerOps is a full-stack finance operations system with provider-neutral card collection, signed payment events, fraud detection, FX recommendations, cash forecasting, compliance scoring, and a state-aware AI finance copilot. Stripe is the first processor adapter; the product and ledger model are not tied to a specific card-issuing bank.
 
 ## Stack
 
@@ -36,7 +36,7 @@ Use the one-click demo account buttons on the sign-in page. Open the second acco
 
 ## Real Payments
 
-Real-money collection is fail-closed. LedgerOps only reports live payments as enabled when both a Stripe live secret key and webhook signing secret are configured.
+Real-money collection is fail-closed. LedgerOps only reports live payments as enabled when a live processor key and signed webhook secret are configured. The initial installed processor is Stripe; the domain model remains issuer- and network-neutral.
 
 ```powershell
 $env:STRIPE_SECRET_KEY="sk_live_..."
@@ -48,6 +48,22 @@ docker compose up --build
 Configure the Stripe webhook endpoint as `https://<your-api-domain>/api/payment-app/stripe-webhook` and subscribe to `checkout.session.completed` and `checkout.session.async_payment_succeeded`. Do not place live keys in source control. A public HTTPS deployment, activated Stripe account, business verification, production database, secret manager, and operational monitoring are required before launch.
 
 Invoice checkout supports real inbound collection. General recipient payouts are intentionally blocked in live mode until connected recipient onboarding and payout compliance are implemented.
+
+Live QuickLinks additionally require:
+
+- a verified LedgerOps email address;
+- authenticator MFA;
+- an installed KYC/AML compliance adapter;
+- payer name, email, country, and a supported purpose code.
+
+Run schema upgrades with:
+
+```bash
+cd backend
+alembic upgrade head
+```
+
+For production recovery email, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_FROM_EMAIL`. Preview reset links are restricted to non-production environments.
 
 Seed users:
 
@@ -105,6 +121,17 @@ npm run dev
 - `POST /api/predict/anomaly`
 - `POST /api/predict/runway`
 - `POST /api/copilot`
+- `GET /api/system/readiness`
+
+## Measure Copilot grounding
+
+Run the account-data benchmark against a running backend:
+
+```powershell
+python backend/scripts/evaluate_copilot.py --email asha.demo@ledgerops.ai --password DemoPass123
+```
+
+The reported percentage measures whether answers contain the expected facts returned by the same account's APIs. It is not a universal financial-advice accuracy claim; use independently verified imported records before describing the result as real-data accuracy.
 
 ## Example Webhook
 

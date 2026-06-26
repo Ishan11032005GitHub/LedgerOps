@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, CheckCircle2, CreditCard, Link as LinkIcon, Plus, QrCode, RefreshCw, ScanLine, ShieldCheck, Star, Trash2, X } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight, CheckCircle2, CreditCard, Link as LinkIcon, ListChecks, Plus, QrCode, RefreshCw, ScanLine, ShieldCheck, Star, Trash2, X } from "lucide-react";
 import { Card, Skeleton } from "../components/Card.jsx";
 import PaymentChatPanel from "../components/PaymentChatPanel.jsx";
 import { accountStorageKey, readStoredUser, walletHandle } from "../lib/account.js";
@@ -47,6 +47,7 @@ export default function PaymentApp() {
   const [link, setLink] = useState(null);
   const [loading, setLoading] = useState("");
   const [loadError, setLoadError] = useState("");
+  const [reconciliation, setReconciliation] = useState(null);
   const account = readStoredUser();
   const currentWalletHandle = walletHandle(account);
   const gatewayBalance = status?.available_balance || 0;
@@ -153,6 +154,20 @@ export default function PaymentApp() {
     try {
       await load();
       setMessage("Gateway activity refreshed.");
+    } catch (err) {
+      setMessage(err.message);
+    } finally {
+      setLoading("");
+    }
+  }
+
+  async function reconcile() {
+    setLoading("reconcile");
+    setMessage("");
+    try {
+      const result = await api("/api/payment-app/reconciliation", { method: "POST" });
+      setReconciliation(result);
+      setMessage(`Reconciliation checked ${result.checked_count} payments and found ${result.exception_count} exceptions.`);
     } catch (err) {
       setMessage(err.message);
     } finally {
@@ -287,23 +302,23 @@ export default function PaymentApp() {
 
   return (
     <div className="space-y-5">
-      <div className={`flex flex-col justify-between gap-3 rounded-lg border p-4 sm:flex-row sm:items-center ${status.mode === "demo" || status.real_payments_enabled ? "border-mint/30 bg-mint/5" : status.mode === "stripe_test" ? "border-amber-300 bg-amber-50" : "border-coral/30 bg-coral/5"}`}>
+      <div className={`flex flex-col justify-between gap-3 rounded-lg border p-4 sm:flex-row sm:items-center ${status.mode === "demo" || status.real_payments_enabled ? "border-mint/30 bg-mint/5" : status.mode?.includes("test") ? "border-amber-300 bg-amber-50" : "border-coral/30 bg-coral/5"}`}>
         <div>
           <div className="text-sm font-semibold text-ink">
-            {status.mode === "demo" ? "Demo money network" : status.real_payments_enabled ? "Live collection configured" : status.mode === "stripe_test" ? "Stripe test mode" : "Payment provider not configured"}
+            {status.mode === "demo" ? "Demo money network" : status.real_payments_enabled ? "Live card collection configured" : status.mode?.includes("test") ? "Card processor test mode" : "Payment processor not configured"}
           </div>
           <div className="mt-1 text-sm text-steel">
             {status.mode === "demo"
               ? "Simulated balances, transfers, history, and chat are enabled. No real money moves."
               : status.real_payments_enabled
-              ? "Invoice checkout can collect real money after Stripe activates the account. Signed webhooks update the ledger."
-              : status.mode === "stripe_test"
+              ? "Eligible cards issued by banks worldwide can pay through secure checkout. Signed processor events update the ledger."
+              : status.mode?.includes("test")
                 ? "No real money moves while test keys are active."
-                : "Add Stripe credentials and a webhook secret before accepting payments."}
+                : "Connect a supported card processor and its signed webhook before accepting payments."}
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-xs font-medium uppercase text-steel">{status.mode?.replace("stripe_", "Stripe ")}</span>
+          <span className="whitespace-nowrap rounded-full bg-white px-3 py-1 text-xs font-medium uppercase text-steel">{status.mode === "demo" ? "Demo" : status.mode?.includes("live") ? "Live cards" : status.mode?.includes("test") ? "Test cards" : status.mode}</span>
         </div>
       </div>
       <div className="grid gap-5 xl:grid-cols-[390px_1fr]">
@@ -395,15 +410,31 @@ export default function PaymentApp() {
               <Metric label="Payments" value={status.mapped_payments} />
               <Metric label="Activity" value={status.webhook_events} />
             </div>
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+            <div className="mt-5 grid gap-3 sm:grid-cols-3">
               <button onClick={beginMethodSetup} disabled={loading === "setup" || loading === "setup-complete"} className="flex items-center justify-center gap-2 rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-60">
                 <Plus size={17} /> {loading === "setup" || loading === "setup-complete" ? "Connecting..." : "Add funding card"}
               </button>
               <button onClick={syncDemo} disabled={loading === "sync"} className="flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-ink hover:bg-panel disabled:opacity-60">
                 <RefreshCw size={17} /> {loading === "sync" ? "Refreshing..." : "Refresh gateway activity"}
               </button>
+              <button onClick={reconcile} disabled={loading === "reconcile"} className="flex items-center justify-center gap-2 rounded-md border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-ink hover:bg-panel disabled:opacity-60">
+                <ListChecks size={17} /> {loading === "reconcile" ? "Checking..." : "Reconcile"}
+              </button>
+            </div>
+            <div className="mt-4 rounded-md border border-slate-200 bg-panel p-3 text-sm text-steel">
+              <span className="font-medium text-ink">Bank-issued cards:</span> ICICI, AU Small Finance Bank, SBI, and other issuers can be used when the card's network, currency, country, online payments, and international-payment settings are supported by the connected processor.
             </div>
             {message && <div className="mt-4 rounded-md bg-panel p-3 text-sm text-steel">{message}</div>}
+            {reconciliation?.exceptions?.length > 0 && (
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 p-3">
+                <div className="text-sm font-medium text-amber-900">Reconciliation exceptions</div>
+                <div className="mt-2 space-y-1 text-xs text-amber-800">
+                  {reconciliation.exceptions.slice(0, 5).map((item) => (
+                    <div key={item.payment_id}>Payment {item.payment_id}: {item.issues.join(", ")}</div>
+                  ))}
+                </div>
+              </div>
+            )}
           </Card>
 
           <Card title="Saved Cards" actions={<button onClick={beginMethodSetup} className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-3 py-1.5 text-xs font-medium hover:bg-panel"><Plus size={14} /> Add</button>}>
@@ -518,7 +549,7 @@ export default function PaymentApp() {
             </div>
             <div>
               <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 size={17} className="text-mint" /> Payment link ready</div>
-              <div className="mt-1 text-xs uppercase text-steel">Secure checkout | {link.mode === "stripe_live" ? "Live payment" : link.mode === "stripe_test" ? "Test payment" : link.mode || "unavailable"}</div>
+              <div className="mt-1 text-xs uppercase text-steel">Secure card checkout | {link.mode?.includes("live") ? "Live payment" : link.mode?.includes("test") ? "Test payment" : link.mode || "unavailable"}</div>
               <div className="mt-2 break-all text-sm text-steel">{link.checkout_url}</div>
               <div className="mt-4 flex flex-wrap gap-2">
                 <a href={link.checkout_url} target="_blank" rel="noreferrer" className="inline-flex items-center justify-center rounded-md bg-mint px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">

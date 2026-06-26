@@ -8,5 +8,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+RUN addgroup --system ledgerops && adduser --system --ingroup ledgerops ledgerops \
+    && mkdir -p /app/model_artifacts \
+    && chown -R ledgerops:ledgerops /app
+USER ledgerops
 EXPOSE 9000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "9000"]

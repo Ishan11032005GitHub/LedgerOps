@@ -14,15 +14,37 @@ class Settings(BaseSettings):
     frontend_url: str = "http://localhost:8080"
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
+    gemini_api_key: str = ""
+    google_api_key: str = ""
+    gemini_model: str = "gemini-2.5-flash"
+    payment_processor: str = "stripe"
     payment_provider_mode: str = "demo"
     demo_only: bool = False
     password_reset_preview: bool = False
+    environment: str = "development"
+    rate_limit_auth_per_minute: int = 10
+    rate_limit_mutations_per_minute: int = 60
+    compliance_provider: str = ""
+    compliance_provider_url: str = ""
+    compliance_provider_api_key: str = ""
+    compliance_provider_timeout_seconds: float = 10
+    max_collection_amount: float = 100000
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_use_tls: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
     @property
     def origins(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def active_gemini_key(self) -> str:
+        return self.gemini_api_key or self.google_api_key
 
 
 @lru_cache

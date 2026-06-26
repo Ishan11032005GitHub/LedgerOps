@@ -4,60 +4,10 @@ import { Card, Skeleton } from "../components/Card.jsx";
 import { api } from "../lib/api.js";
 import { accountStorageKey, readStoredUser } from "../lib/account.js";
 import { downloadCsv, downloadJson } from "../lib/downloads.js";
+import { buildTrie, filterRows, trieSuggestions } from "../lib/trie.js";
 
 const pageCache = {};
 const pageRequests = {};
-const MAX_SUGGESTIONS = 6;
-
-function createTrie() {
-  return { children: new Map(), suggestions: [] };
-}
-
-function addSuggestion(node, suggestion) {
-  if (!node.suggestions.some((item) => item.value === suggestion.value && item.column === suggestion.column)) {
-    node.suggestions.push(suggestion);
-    node.suggestions.sort((a, b) => a.value.localeCompare(b.value));
-    if (node.suggestions.length > MAX_SUGGESTIONS) node.suggestions.length = MAX_SUGGESTIONS;
-  }
-}
-
-function insertTrie(root, text, suggestion) {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return;
-  let node = root;
-  addSuggestion(node, suggestion);
-  for (const char of normalized) {
-    if (!node.children.has(char)) node.children.set(char, createTrie());
-    node = node.children.get(char);
-    addSuggestion(node, suggestion);
-  }
-}
-
-function searchTrie(root, query) {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return [];
-  let node = root;
-  for (const char of normalized) {
-    node = node.children.get(char);
-    if (!node) return [];
-  }
-  return node.suggestions;
-}
-
-function buildSearchTrie(rows, columns) {
-  const root = createTrie();
-  rows.forEach((row) => {
-    columns.forEach((column) => {
-      const value = String(row[column] ?? "").trim();
-      if (!value) return;
-      const suggestion = { value, column };
-      insertTrie(root, value, suggestion);
-      value.split(/[\s|/_-]+/).forEach((token) => insertTrie(root, token, suggestion));
-    });
-  });
-  return root;
-}
-
 export function prefetchDataPage(type) {
   const key = `${accountStorageKey()}:${type}`;
   if (pageCache[key]) return Promise.resolve(pageCache[key]);
@@ -98,14 +48,13 @@ export default function DataPage({ type }) {
   const restrictedByRole = user.role === "Viewer" ? new Set(["external_ref", "invoice_id", "customer_id", "metadata_json", "user_id"]) : new Set(["metadata_json", "user_id"]);
   const available = Object.keys(rows[0] || {}).filter((k) => !["hashed_password"].includes(k) && !restrictedByRole.has(k));
   const columns = [...preferred.filter((key) => available.includes(key)), ...available.filter((key) => !preferred.includes(key))].slice(0, 8);
-  const title = type.replace("-", " ").toUpperCase();
+  const entityLabel = type === "customers" ? "clients" : type.replace("-", " ");
+  const title = entityLabel.toUpperCase();
   const searchable = type === "payments" || type === "invoices";
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleRows = normalizedQuery
-    ? rows.filter((row) => columns.some((column) => String(row[column] ?? "").toLowerCase().includes(normalizedQuery)))
-    : rows;
-  const trie = searchable ? buildSearchTrie(rows, columns) : null;
-  const suggestions = searchable ? searchTrie(trie, query) : [];
+  const visibleRows = filterRows(rows, columns, query);
+  const trie = searchable ? buildTrie(rows, columns) : null;
+  const suggestions = searchable ? trieSuggestions(trie, query) : [];
   return (
     <Card title={title} actions={
       <>
@@ -154,7 +103,7 @@ export default function DataPage({ type }) {
           </table>
         ) : (
           <div className="rounded-md border border-dashed border-slate-300 px-4 py-8 text-center text-sm text-steel">
-            {normalizedQuery ? `No ${type} match "${query}".` : `No ${type} available yet.`}
+            {normalizedQuery ? `No ${entityLabel} match "${query}".` : `No ${entityLabel} available yet.`}
           </div>
         )}
       </div>

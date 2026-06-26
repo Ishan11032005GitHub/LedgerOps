@@ -1,6 +1,6 @@
 from datetime import datetime, date
 from enum import Enum
-from sqlalchemy import Boolean, Date, DateTime, Enum as SqlEnum, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Enum as SqlEnum, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from .database import Base
 
@@ -18,9 +18,13 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(120))
     account_type: Mapped[str] = mapped_column(String(30), default="company")
     workspace_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    workspace_key: Mapped[str] = mapped_column(String(64), index=True)
     hashed_password: Mapped[str] = mapped_column(String(255))
     role: Mapped[Role] = mapped_column(SqlEnum(Role), default=Role.viewer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    mfa_secret: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -42,6 +46,27 @@ class PasswordResetToken(Base):
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime)
     used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class EmailVerificationToken(Base):
+    __tablename__ = "email_verification_tokens"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    session_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    refresh_token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -100,9 +125,11 @@ class Customer(Base):
 
 class Invoice(Base):
     __tablename__ = "invoices"
+    __table_args__ = (UniqueConstraint("workspace_key", "invoice_number", name="uq_invoices_workspace_number"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
-    invoice_number: Mapped[str] = mapped_column(String(40), unique=True, index=True)
+    workspace_key: Mapped[str] = mapped_column(String(64), index=True)
+    invoice_number: Mapped[str] = mapped_column(String(40), index=True)
     customer_id: Mapped[int] = mapped_column(ForeignKey("customers.id"))
     amount: Mapped[float] = mapped_column(Float)
     currency: Mapped[str] = mapped_column(String(8))
@@ -128,6 +155,72 @@ class Payment(Base):
     rail: Mapped[str] = mapped_column(String(40), default="SWIFT")
     received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     external_ref: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+
+
+class QuickLink(Base):
+    __tablename__ = "quick_links"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    public_id: Mapped[str] = mapped_column(String(48), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(160))
+    payer_name: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    payer_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    payer_country: Mapped[str | None] = mapped_column(String(2), nullable=True)
+    amount: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(8))
+    purpose_code: Mapped[str] = mapped_column(String(40), default="services")
+    status: Mapped[str] = mapped_column(String(24), default="active", index=True)
+    provider: Mapped[str] = mapped_column(String(40), default="Card processor")
+    provider_mode: Mapped[str] = mapped_column(String(24), default="unconfigured")
+    checkout_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    checkout_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    invoice_id: Mapped[int | None] = mapped_column(ForeignKey("invoices.id"), nullable=True)
+    payment_id: Mapped[int | None] = mapped_column(ForeignKey("payments.id"), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    paid_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class Refund(Base):
+    __tablename__ = "refunds"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    payment_id: Mapped[int] = mapped_column(ForeignKey("payments.id"), index=True)
+    amount: Mapped[float] = mapped_column(Float)
+    currency: Mapped[str] = mapped_column(String(8))
+    reason: Mapped[str] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True)
+    provider_ref: Mapped[str | None] = mapped_column(String(160), nullable=True, unique=True)
+    idempotency_key: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ReconciliationRun(Base):
+    __tablename__ = "reconciliation_runs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="running", index=True)
+    checked_count: Mapped[int] = mapped_column(Integer, default=0)
+    matched_count: Mapped[int] = mapped_column(Integer, default=0)
+    exception_count: Mapped[int] = mapped_column(Integer, default=0)
+    exceptions: Mapped[list] = mapped_column(JSON, default=list)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    workspace_name: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(String(100), index=True)
+    entity_type: Mapped[str] = mapped_column(String(60))
+    entity_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(30), default="success")
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    request_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class Transaction(Base):

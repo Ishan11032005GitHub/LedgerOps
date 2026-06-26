@@ -30,6 +30,8 @@ services:
 
   backend:
     build: ./backend
+    env_file:
+      - ./backend/.env
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/infinityguard
       REDIS_URL: redis://redis:6379/0
@@ -41,9 +43,15 @@ services:
       DEMO_ONLY: "true"
       STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
       STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
+      GEMINI_MODEL: gemini-2.5-flash
       PASSWORD_RESET_PREVIEW: "true"
     ports:
       - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,7 +68,8 @@ services:
     ports:
       - "8081:80"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   pgdata:

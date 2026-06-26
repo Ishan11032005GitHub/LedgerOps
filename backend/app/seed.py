@@ -20,8 +20,10 @@ def ensure_demo_accounts(db: Session) -> None:
                 name=spec["name"],
                 account_type="individual",
                 workspace_name=f"{spec['name']}'s demo wallet",
+                workspace_key=f"demo-{spec['email'].split('@')[0]}",
                 hashed_password=hash_password(spec["password"]),
                 role=Role.admin,
+                email_verified=True,
             )
             db.add(user)
             db.flush()
@@ -48,11 +50,11 @@ def seed(db: Session) -> None:
     if db.query(User).filter(~User.email.in_(demo_emails)).first():
         return
 
-    admin = User(email="admin@ledgerops.ai", name="Avery Shah", account_type="company", workspace_name="LedgerOps workspace", hashed_password=hash_password("AdminPass123"), role=Role.admin)
+    admin = User(email="admin@ledgerops.ai", name="Avery Shah", account_type="company", workspace_name="LedgerOps workspace", workspace_key="ledgerops-company-demo", hashed_password=hash_password("AdminPass123"), role=Role.admin, email_verified=True)
     db.add_all([
         admin,
-        User(email="finance@ledgerops.ai", name="Mira Chen", account_type="company", workspace_name="LedgerOps workspace", hashed_password=hash_password("FinancePass123"), role=Role.finance_manager),
-        User(email="viewer@ledgerops.ai", name="Leo Grant", account_type="company", workspace_name="LedgerOps workspace", hashed_password=hash_password("ViewerPass123"), role=Role.viewer),
+        User(email="finance@ledgerops.ai", name="Mira Chen", account_type="company", workspace_name="LedgerOps workspace", workspace_key="ledgerops-company-demo", hashed_password=hash_password("FinancePass123"), role=Role.finance_manager, email_verified=True),
+        User(email="viewer@ledgerops.ai", name="Leo Grant", account_type="company", workspace_name="LedgerOps workspace", workspace_key="ledgerops-company-demo", hashed_password=hash_password("ViewerPass123"), role=Role.viewer, email_verified=True),
     ])
     db.flush()
 
@@ -81,6 +83,7 @@ def seed(db: Session) -> None:
         paid_at = due + timedelta(days=rng.randint(-3, 16)) if paid else None
         invoice = Invoice(
             user_id=admin.id,
+            workspace_key=admin.workspace_key,
             invoice_number=f"INV-{2026}-{1000 + idx}",
             customer_id=customer.id,
             amount=amount,

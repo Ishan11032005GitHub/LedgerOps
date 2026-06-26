@@ -1,4 +1,4 @@
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy.orm import Session
 from ..account_scope import account_user_ids
 from ..auth import current_user, require_roles
@@ -32,6 +32,11 @@ def find_or_create_customer(db: Session, user: User, name: str, country: str, cu
 
 @router.post("/payment-received", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
 def payment_received(payload: PaymentWebhookIn, background: BackgroundTasks, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    existing = db.query(Payment).filter(Payment.external_ref == payload.external_ref).first()
+    if existing:
+        if existing.user_id not in account_user_ids(db, user):
+            raise HTTPException(status_code=409, detail="Payment reference is already registered")
+        return {"status": "already_exists", "payment_id": existing.id}
     customer = find_or_create_customer(db, user, payload.customer_name, payload.country, payload.currency)
     invoice = db.query(Invoice).filter(Invoice.user_id.in_(account_user_ids(db, user)), Invoice.invoice_number == payload.invoice_number).first() if payload.invoice_number else None
     payment = Payment(
@@ -57,7 +62,13 @@ def payment_received(payload: PaymentWebhookIn, background: BackgroundTasks, db:
 @router.post("/invoice-created", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
 def invoice_created(payload: InvoiceWebhookIn, background: BackgroundTasks, db: Session = Depends(get_db), user: User = Depends(current_user)):
     customer = find_or_create_customer(db, user, payload.customer_name, payload.country, payload.currency)
-    invoice = Invoice(user_id=user.id, customer_id=customer.id, **payload.model_dump(exclude={"customer_name"}), status="pending")
+    duplicate = db.query(Invoice).filter(
+        Invoice.user_id.in_(account_user_ids(db, user)),
+        Invoice.invoice_number == payload.invoice_number,
+    ).first()
+    if duplicate:
+        return {"status": "already_exists", "invoice_id": duplicate.id}
+    invoice = Invoice(user_id=user.id, workspace_key=user.workspace_key, customer_id=customer.id, **payload.model_dump(exclude={"customer_name"}), status="pending")
     db.add(invoice)
     db.flush()
     event = enqueue_event(db, "invoice.created", payload.model_dump(mode="json") | {"invoice_id": invoice.id}, user_id=user.id)
