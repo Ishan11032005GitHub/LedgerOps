@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     smtp_from_email: str = ""
     smtp_use_tls: bool = True
+    database_backups_configured: bool = False
+    monitoring_configured: bool = False
+    legal_review_completed: bool = False
+    security_review_completed: bool = False
+    restricted_pilot_enabled: bool = False
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

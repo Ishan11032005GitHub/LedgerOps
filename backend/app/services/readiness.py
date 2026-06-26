@@ -87,6 +87,36 @@ def deployment_readiness(settings: Settings, engine) -> dict:
                     "Compliance screening adapter configured" if settings.compliance_provider == "http" and settings.compliance_provider_url else "Configure the HTTP KYC/AML screening adapter",
                     "live_money",
                 ),
+                ReadinessCheck(
+                    "database_backups",
+                    settings.database_backups_configured,
+                    "Database backups and restore drill are configured" if settings.database_backups_configured else "Configure managed PostgreSQL backups and a restore drill",
+                    "production",
+                ),
+                ReadinessCheck(
+                    "monitoring",
+                    settings.monitoring_configured,
+                    "Monitoring, uptime checks, and error alerts are configured" if settings.monitoring_configured else "Configure monitoring, uptime checks, and error alerts",
+                    "production",
+                ),
+                ReadinessCheck(
+                    "legal_review",
+                    settings.legal_review_completed,
+                    "Legal policies and merchant terms are signed off" if settings.legal_review_completed else "Complete terms, privacy, refund, dispute, data-retention, and jurisdiction review",
+                    "production",
+                ),
+                ReadinessCheck(
+                    "security_review",
+                    settings.security_review_completed,
+                    "Security review and payment-flow review are complete" if settings.security_review_completed else "Complete penetration test and payment-security review",
+                    "production",
+                ),
+                ReadinessCheck(
+                    "restricted_pilot",
+                    settings.restricted_pilot_enabled,
+                    "Restricted pilot mode is enabled" if settings.restricted_pilot_enabled else "Run live money through a restricted pilot before public launch",
+                    "live_money",
+                ),
             ]
         )
 

@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 from app.database import Base, SessionLocal, engine
 from app.main import app
+from app.models import Alert, EventLog, Payment, QuickLink
 from app.seed import seed
 
 
@@ -86,6 +87,140 @@ def test_demo_quicklink_settlement_refund_and_reconciliation():
     reconciliation = client.post("/api/payment-app/reconciliation", headers=headers)
     assert reconciliation.status_code == 200
     assert reconciliation.json()["status"] == "completed"
+
+
+def create_demo_quicklink(headers, *, amount=1500, currency="INR"):
+    created = client.post(
+        "/api/payment-app/quicklinks",
+        headers=headers,
+        json={
+            "title": "Webhook services",
+            "amount": amount,
+            "currency": currency,
+            "payer_name": "Rohan Kapoor",
+            "payer_email": "rohan.demo@ledgerops.ai",
+            "payer_country": "IN",
+            "purpose_code": "services",
+            "expires_in_days": 14,
+        },
+    )
+    assert created.status_code == 200
+    return created.json()
+
+
+def test_stripe_webhook_settles_quicklink_and_is_idempotent(monkeypatch):
+    tokens = login_demo()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    link = create_demo_quicklink(headers)
+
+    async def fake_event(_request):
+        return {
+            "id": "evt_checkout_quicklink_once",
+            "type": "checkout.session.completed",
+            "data": {
+                "object": {
+                    "id": "cs_test_quicklink_once",
+                    "payment_status": "paid",
+                    "amount_total": 150000,
+                    "currency": "inr",
+                    "payment_intent": "pi_quicklink_once",
+                    "metadata": {
+                        "quicklink_id": str(link["id"]),
+                        "ledgerops_user_id": str(tokens["user"]["id"]),
+                        "customer_name": "Rohan Kapoor",
+                    },
+                }
+            },
+        }
+
+    monkeypatch.setattr("app.routers.payment_app.verified_stripe_event", fake_event)
+    processed = client.post("/api/payment-app/stripe-webhook", content=b"{}")
+    assert processed.status_code == 200
+    assert processed.json()["status"] == "processed"
+
+    duplicate = client.post("/api/payment-app/stripe-webhook", content=b"{}")
+    assert duplicate.status_code == 200
+    assert duplicate.json()["status"] == "already_processed"
+
+    db = SessionLocal()
+    try:
+        stored = db.get(QuickLink, link["id"])
+        assert stored.status == "paid"
+        assert stored.payment_id is not None
+        events = db.query(EventLog).filter(EventLog.event_type == "stripe.checkout.completed").all()
+        matching = [event for event in events if event.payload.get("stripe_event_id") == "evt_checkout_quicklink_once"]
+        assert len(matching) == 1
+    finally:
+        db.close()
+
+
+def test_stripe_refund_and_dispute_webhooks_update_payment_state(monkeypatch):
+    tokens = login_demo()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+    link = create_demo_quicklink(headers, amount=2000)
+    paid = client.post(
+        f"/api/payment-app/public/quicklinks/{link['public_id']}/demo-pay",
+        json={
+            "cardholder_name": "Rohan Kapoor",
+            "card_number": "4242424242424242",
+            "expiry_month": 12,
+            "expiry_year": 2029,
+            "cvc": "123",
+        },
+    )
+    assert paid.status_code == 200
+
+    db = SessionLocal()
+    try:
+        stored_link = db.get(QuickLink, link["id"])
+        payment = db.get(Payment, stored_link.payment_id)
+        payment_ref = payment.external_ref
+    finally:
+        db.close()
+
+    async def refund_event(_request):
+        return {
+            "id": "evt_charge_refunded_once",
+            "type": "charge.refunded",
+            "data": {"object": {"payment_intent": payment_ref, "amount_refunded": 200000}},
+        }
+
+    monkeypatch.setattr("app.routers.payment_app.verified_stripe_event", refund_event)
+    refunded = client.post("/api/payment-app/stripe-webhook", content=b"{}")
+    assert refunded.status_code == 200
+    assert refunded.json()["status"] == "processed"
+
+    db = SessionLocal()
+    try:
+        payment = db.query(Payment).filter(Payment.external_ref == payment_ref).first()
+        assert payment.status == "refunded"
+        assert db.get(QuickLink, link["id"]).status == "refunded"
+        payment.status = "settled"
+        db.commit()
+    finally:
+        db.close()
+
+    async def dispute_event(_request):
+        return {
+            "id": "evt_dispute_once",
+            "type": "charge.dispute.created",
+            "data": {"object": {"id": "dp_once", "payment_intent": payment_ref, "reason": "fraudulent"}},
+        }
+
+    monkeypatch.setattr("app.routers.payment_app.verified_stripe_event", dispute_event)
+    disputed = client.post("/api/payment-app/stripe-webhook", content=b"{}")
+    assert disputed.status_code == 200
+    assert disputed.json()["status"] == "processed"
+
+    db = SessionLocal()
+    try:
+        payment = db.query(Payment).filter(Payment.external_ref == payment_ref).first()
+        assert payment.status == "disputed"
+        alert = db.query(Alert).filter(Alert.entity_type == "payment", Alert.entity_id == payment.id).first()
+        assert alert is not None
+        assert alert.category == "payment-dispute"
+    finally:
+        db.close()
 
 
 def test_company_scope_is_shared_but_individual_accounts_are_isolated():

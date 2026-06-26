@@ -72,7 +72,7 @@ def provider_status() -> dict:
 
 async def create_checkout_link(invoice: Invoice, customer: Customer | None, user: User, customer_email: str | None = None, success_url: str | None = None) -> CheckoutLink:
     settings = get_settings()
-    if not settings.stripe_secret_key:
+    if settings.demo_only or not settings.stripe_secret_key:
         if not settings.demo_only and settings.payment_provider_mode != "demo":
             raise HTTPException(status_code=503, detail="Payment provider is not configured")
         checkout_id = f"ig_chk_{invoice.id}_{int(time.time())}"
@@ -130,7 +130,7 @@ async def create_checkout_link(invoice: Invoice, customer: Customer | None, user
 
 async def create_quicklink_checkout(quick_link: QuickLink, user: User) -> CheckoutLink:
     settings = get_settings()
-    if not settings.stripe_secret_key:
+    if settings.demo_only or not settings.stripe_secret_key:
         if not settings.demo_only and settings.payment_provider_mode != "demo":
             raise HTTPException(status_code=503, detail="Payment provider is not configured")
         checkout_id = f"ql_demo_{quick_link.public_id}"
@@ -186,7 +186,7 @@ async def create_quicklink_checkout(quick_link: QuickLink, user: User) -> Checko
 
 async def retrieve_checkout_session(checkout_id: str) -> dict:
     settings = get_settings()
-    if not settings.stripe_secret_key:
+    if settings.demo_only or not settings.stripe_secret_key:
         if not settings.demo_only and settings.payment_provider_mode != "demo":
             raise HTTPException(status_code=503, detail="Payment provider is not configured")
         return {
@@ -213,7 +213,7 @@ async def retrieve_checkout_session(checkout_id: str) -> dict:
 
 async def create_card_setup_session(user: User) -> CheckoutLink | None:
     settings = get_settings()
-    if not settings.stripe_secret_key:
+    if settings.demo_only or not settings.stripe_secret_key:
         return None
 
     settings, mode = require_stripe(require_webhook=True)
@@ -249,7 +249,7 @@ async def create_card_setup_session(user: User) -> CheckoutLink | None:
 
 async def retrieve_card_setup_session(checkout_id: str) -> dict:
     settings = get_settings()
-    if not settings.stripe_secret_key:
+    if settings.demo_only or not settings.stripe_secret_key:
         raise HTTPException(status_code=400, detail="Secure card setup is not configured")
     settings, _mode = require_stripe()
     async with httpx.AsyncClient(timeout=20) as client:
@@ -266,7 +266,7 @@ async def retrieve_card_setup_session(checkout_id: str) -> dict:
 
 async def charge_saved_card(provider_token: str | None, amount: float, currency: str, description: str, idempotency_key: str) -> dict | None:
     settings = get_settings()
-    if not settings.stripe_secret_key or not provider_token:
+    if settings.demo_only or not settings.stripe_secret_key or not provider_token:
         return None
     settings, _mode = require_stripe(require_webhook=True)
     try:
