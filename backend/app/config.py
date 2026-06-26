@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     ml_service_url: str = "http://localhost:9000"
     cors_origins: str = "http://localhost:5173"
     frontend_url: str = "http://localhost:8080"
+    public_app_url: str = ""
     stripe_secret_key: str = ""
     stripe_webhook_secret: str = ""
     gemini_api_key: str = ""

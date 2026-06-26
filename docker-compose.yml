@@ -41,8 +41,6 @@ services:
       FRONTEND_URL: http://localhost:8081
       PAYMENT_PROVIDER_MODE: ${PAYMENT_PROVIDER_MODE:-disabled}
       DEMO_ONLY: "true"
-      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
-      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-}
       GEMINI_MODEL: gemini-2.5-flash
       PASSWORD_RESET_PREVIEW: "true"
     ports:
