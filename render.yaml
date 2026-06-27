@@ -60,6 +60,7 @@ services:
   - type: redis
     name: ledgerops-redis
     plan: starter
+    ipAllowList: []
 databases:
   - name: ledgerops-postgres
     plan: starter
