@@ -5,14 +5,14 @@ import { api, login, signup } from "../lib/api.js";
 
 export default function Login({ mode = "login" }) {
   const isSignup = mode === "signup";
-  const [name, setName] = useState("Avery Shah");
-  const [email, setEmail] = useState("admin@ledgerops.ai");
-  const [password, setPassword] = useState("AdminPass123");
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
   const [needsMfa, setNeedsMfa] = useState(false);
   const [role, setRole] = useState("Finance Manager");
   const [accountType, setAccountType] = useState("company");
-  const [workspaceName, setWorkspaceName] = useState("LedgerOps workspace");
+  const [workspaceName, setWorkspaceName] = useState("");
   const [error, setError] = useState("");
   const [demoLoading, setDemoLoading] = useState("");
   const [demoResetting, setDemoResetting] = useState(false);
@@ -120,11 +120,11 @@ export default function Login({ mode = "login" }) {
             {accountType === "company" && (
               <>
                 <label className="text-sm font-medium">Company / workspace name</label>
-                <input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} className="mt-1 mb-4 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
+                <input value={workspaceName} onChange={(e) => setWorkspaceName(e.target.value)} placeholder="Ex. Acme Finance Workspace" className="mt-1 mb-4 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
               </>
             )}
             <label className="text-sm font-medium">Full name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex. Avery Shah" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
             {accountType === "company" && (
               <>
                 <label className="mt-4 block text-sm font-medium">Role</label>
@@ -138,12 +138,12 @@ export default function Login({ mode = "login" }) {
           </>
         )}
         <label className={`${isSignup ? "mt-4 block" : ""} text-sm font-medium`}>Email</label>
-        <input value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
+        <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder={isSignup ? "Ex. founder@company.com" : "Ex. admin@ledgerops.ai"} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
         <div className="mt-4 flex items-center justify-between gap-3">
           <label className="text-sm font-medium">Password</label>
           {!isSignup && <Link to="/forgot-password" className="text-sm font-medium text-mint hover:text-emerald-700">Forgot password?</Link>}
         </div>
-        <input required minLength={isSignup ? 10 : 1} type="password" value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
+        <input required minLength={isSignup ? 10 : 1} type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder={isSignup ? "Create a strong password" : "Enter your password"} className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
         {!isSignup && needsMfa && (
           <label className="mt-4 block text-sm font-medium">Authenticator code
             <input autoFocus required inputMode="numeric" pattern="\d{6}" maxLength={6} value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 outline-none focus:border-mint" />
