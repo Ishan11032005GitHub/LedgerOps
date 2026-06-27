@@ -12,6 +12,7 @@ const QuickLinks = lazy(() => import("./pages/QuickLinks.jsx"));
 const QuickLinkCheckout = lazy(() => import("./pages/QuickLinkCheckout.jsx"));
 const Settings = lazy(() => import("./pages/Settings.jsx"));
 const CountryCodes = lazy(() => import("./pages/CountryCodes.jsx"));
+const ProductOps = lazy(() => import("./pages/ProductOps.jsx"));
 
 function Protected({ children }) {
   return localStorage.getItem("ig_access_token") ? children : <Navigate to="/login" replace />;
@@ -40,6 +41,16 @@ export default function App() {
           <Route path="/fraud" element={<IntelligencePage mode="fraud" />} />
           <Route path="/cash" element={<IntelligencePage mode="cash" />} />
           <Route path="/compliance" element={<IntelligencePage mode="compliance" />} />
+          <Route path="/action-center" element={<ProductOps mode="action-center" />} />
+          <Route path="/payment-timeline" element={<ProductOps mode="payment-timeline" />} />
+          <Route path="/receipt-center" element={<ProductOps mode="receipt-center" />} />
+          <Route path="/client-profiles" element={<ProductOps mode="client-profiles" />} />
+          <Route path="/approvals" element={<ProductOps mode="approvals" />} />
+          <Route path="/audit-log" element={<ProductOps mode="audit" />} />
+          <Route path="/notifications" element={<ProductOps mode="notifications" />} />
+          <Route path="/reconciliation" element={<ProductOps mode="reconciliation" />} />
+          <Route path="/permissions" element={<ProductOps mode="permissions" />} />
+          <Route path="/demo-story" element={<ProductOps mode="demo-story" />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/settings/recovery" element={<PasswordRecovery insideAccount />} />
         </Route>

@@ -6,7 +6,7 @@ LedgerOps is a standalone finance intelligence layer for cross-border SMB paymen
 
 - `frontend`: React + Vite dashboard with TailwindCSS, React Router, Recharts, Framer Motion, and authenticated views.
 - `backend`: FastAPI API service with JWT auth, role-based access, PostgreSQL persistence, Redis-backed event queue hooks, webhook handlers, compliance logic, and ML proxy endpoints.
-- `ml-service`: Python FastAPI microservice using scikit-learn, XGBoost, pandas, and synthetic operational training data.
+- `intelligence-service`: Python FastAPI microservice using scikit-learn, XGBoost, pandas, and synthetic operational training data.
 - `postgres`: system of record for users, customers, invoices, payments, transactions, FX rates, alerts, predictions, compliance checks, and event logs.
 - `redis`: event queue/cache dependency for webhook processing.
 

@@ -160,6 +160,14 @@ function demoResponse(path, options = {}) {
   if (path === "/api/payments") return payments;
   if (path === "/api/invoices") return invoices;
   if (path === "/api/customers") return customers;
+  if (path === "/api/alerts") return alerts;
+  if (path === "/api/payment-app/audit-log") {
+    return [
+      { id: 1, created_at: new Date().toISOString(), action: "QuickLink created", entity_type: "quicklink", outcome: "success" },
+      { id: 2, created_at: new Date(Date.now() - 3600000).toISOString(), action: "Payment reconciled", entity_type: "payment", outcome: "success" },
+      { id: 3, created_at: new Date(Date.now() - 7200000).toISOString(), action: "CSV exported", entity_type: "report", outcome: "success" },
+    ];
+  }
   if (path === "/api/dashboard") {
     const currencyExposure = seededDemo ? { USD: 15956, EUR: 99240, JPY: 23990, AED: 85819, CAD: 35300, ZAR: 58943 } : {};
     return {

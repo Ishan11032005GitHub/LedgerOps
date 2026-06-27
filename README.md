@@ -87,7 +87,7 @@ uvicorn app.main:app --reload
 ML service:
 
 ```bash
-cd ml-service
+cd intelligence-service
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -147,7 +147,7 @@ curl -X POST http://localhost:8000/api/webhooks/payment-received \
 ```text
 frontend/      React dashboard and Vercel config
 backend/       FastAPI API, auth, domain models, webhooks, compliance, copilot
-ml-service/    ML prediction service
+intelligence-service/    Finance intelligence prediction service
 docker/        shared deployment config
 docs/          architecture notes
 ```

@@ -110,7 +110,7 @@ def train_models() -> None:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "ml-service", "models_loaded": sorted(models)}
+    return {"status": "ok", "service": "intelligence-service", "models_loaded": sorted(models)}
 
 
 @app.post("/predict/payment-delay")

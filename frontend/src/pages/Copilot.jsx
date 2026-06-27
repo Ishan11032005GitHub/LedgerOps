@@ -109,7 +109,9 @@ export default function Copilot({ embedded = false, compact = false }) {
         text: result.answer,
         confidence: result.confidence,
         sources: result.sources,
+        stateUsed: result.state_used,
         model: result.model,
+        asOf: result.as_of,
         notice: result.notice,
         createdAt: new Date().toISOString(),
       };
@@ -273,12 +275,23 @@ function titleFromQuestion(question) {
 }
 
 function ResponseMeta({ message }) {
-  if (!message.confidence && !message.sources?.length && !message.notice) return null;
+  const stateEntries = Object.entries(message.stateUsed || {}).filter(([, value]) => value !== null && value !== undefined && value !== "");
+  if (!message.confidence && !message.sources?.length && !message.notice && !stateEntries.length) return null;
   return (
     <div className="mt-3 border-t border-slate-200 pt-2 text-[11px] leading-5 text-steel">
       {message.confidence && <div><span className="font-medium text-ink">Confidence:</span> {message.confidence}</div>}
       {message.model && <div><span className="font-medium text-ink">Model:</span> {message.model}</div>}
+      {message.asOf && <div><span className="font-medium text-ink">Data date:</span> {message.asOf}</div>}
       {!!message.sources?.length && <div><span className="font-medium text-ink">Account data:</span> {message.sources.join(", ")}</div>}
+      {!!stateEntries.length && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {stateEntries.map(([key, value]) => (
+            <span key={key} className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] text-steel">
+              {key.replaceAll("_", " ")}: {String(value)}
+            </span>
+          ))}
+        </div>
+      )}
       {message.notice && <div className="mt-1">{message.notice}</div>}
     </div>
   );

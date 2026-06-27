@@ -712,6 +712,33 @@ def quicklink_receipt(link_id: int, db: Session = Depends(get_db), user: User = 
     )
 
 
+@router.get("/payments/{payment_id}/receipt")
+def payment_receipt(payment_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    payment = db.query(Payment).filter(Payment.id == payment_id, Payment.user_id.in_(account_user_ids(db, user))).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    customer = db.get(Customer, payment.customer_id)
+    refunds = db.query(Refund).filter(Refund.payment_id == payment.id, Refund.status.in_(["succeeded", "refunded", "completed"])).all()
+    refunded_amount = sum(refund.amount for refund in refunds)
+    pdf = build_receipt_pdf(
+        workspace=user.workspace_name or user.name,
+        merchant=user.name,
+        payer=customer.name if customer else "Card payer",
+        amount=payment.amount,
+        currency=payment.currency,
+        reference=payment.external_ref,
+        paid_at=payment.received_at,
+        payment_rail=payment.rail,
+        purpose=f"Payment {payment.status}",
+        refunded_amount=refunded_amount,
+    )
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="receipt-payment-{payment.id}.pdf"'},
+    )
+
+
 @router.post("/quicklinks/{link_id}/refund", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
 async def refund_quicklink(link_id: int, payload: RefundCreateIn, db: Session = Depends(get_db), user: User = Depends(current_user)):
     link = db.query(QuickLink).filter(QuickLink.id == link_id, QuickLink.user_id.in_(account_user_ids(db, user))).first()

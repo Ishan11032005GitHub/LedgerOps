@@ -18,10 +18,10 @@ services:
   redis:
     image: redis:7-alpine
 
-  ml-service:
-    build: ./ml-service
+  intelligence-service:
+    build: ./intelligence-service
     volumes:
-      - ml_models:/app/model_artifacts
+      - intelligence_models:/app/model_artifacts
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
       interval: 10s
@@ -35,7 +35,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/infinityguard
       REDIS_URL: redis://redis:6379/0
-      ML_SERVICE_URL: http://ml-service:9000
+      ML_SERVICE_URL: http://intelligence-service:9000
       CORS_ORIGINS: http://localhost:5173,http://localhost:3000,http://localhost:8080,http://localhost:8081
       FRONTEND_URL: http://localhost:8081
       PAYMENT_PROVIDER_MODE: ${PAYMENT_PROVIDER_MODE:-disabled}
@@ -54,7 +54,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      ml-service:
+      intelligence-service:
         condition: service_healthy
 
   frontend:
@@ -70,4 +70,4 @@ services:
 
 volumes:
   pgdata:
-  ml_models:
+  intelligence_models:

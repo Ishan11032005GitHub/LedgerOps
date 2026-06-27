@@ -54,7 +54,7 @@ services:
   - type: web
     name: ledgerops-ml
     env: docker
-    rootDir: ml-service
+    rootDir: intelligence-service
     plan: starter
     healthCheckPath: /health
   - type: redis
