@@ -1,7 +1,7 @@
 from fastapi.testclient import TestClient
 from app.database import Base, SessionLocal, engine
 from app.main import app
-from app.models import Alert, EventLog, Payment, QuickLink
+from app.models import Alert, Customer, EventLog, Payment, QuickLink
 from app.seed import seed
 
 
@@ -150,6 +150,7 @@ def test_stripe_webhook_settles_quicklink_and_is_idempotent(monkeypatch):
         events = db.query(EventLog).filter(EventLog.event_type == "stripe.checkout.completed").all()
         matching = [event for event in events if event.payload.get("stripe_event_id") == "evt_checkout_quicklink_once"]
         assert len(matching) == 1
+        assert matching[0].external_id == "evt_checkout_quicklink_once"
     finally:
         db.close()
 
@@ -221,6 +222,67 @@ def test_stripe_refund_and_dispute_webhooks_update_payment_state(monkeypatch):
         assert alert.category == "payment-dispute"
     finally:
         db.close()
+
+
+def test_stripe_ignored_webhook_is_idempotent(monkeypatch):
+    async def ignored_event(_request):
+        return {
+            "id": "evt_ignored_once",
+            "type": "customer.created",
+            "data": {"object": {"id": "cus_ignored"}},
+        }
+
+    monkeypatch.setattr("app.routers.payment_app.verified_stripe_event", ignored_event)
+    first = client.post("/api/payment-app/stripe-webhook", content=b"{}")
+    assert first.status_code == 200
+    assert first.json()["status"] == "ignored"
+
+    second = client.post("/api/payment-app/stripe-webhook", content=b"{}")
+    assert second.status_code == 200
+    assert second.json()["status"] == "already_processed"
+
+    db = SessionLocal()
+    try:
+        events = db.query(EventLog).filter(EventLog.external_id == "evt_ignored_once").all()
+        assert len(events) == 1
+    finally:
+        db.close()
+
+
+def test_reconciliation_flags_money_movement_exceptions():
+    tokens = login_demo()
+    headers = {"Authorization": f"Bearer {tokens['access_token']}"}
+
+    db = SessionLocal()
+    try:
+        customer = Customer(user_id=tokens["user"]["id"], name="Reconcile Client", country="US", currency="USD")
+        db.add(customer)
+        db.flush()
+        bad_payment = Payment(
+            user_id=tokens["user"]["id"],
+            customer_id=customer.id,
+            amount=0,
+            currency="USD",
+            country="US",
+            status="processing",
+            rail="Card checkout",
+            external_ref="manual_bad_ref",
+        )
+        db.add(bad_payment)
+        db.commit()
+    finally:
+        db.close()
+
+    reconciliation = client.post("/api/payment-app/reconciliation", headers=headers)
+    assert reconciliation.status_code == 200
+    issues = {
+        issue
+        for row in reconciliation.json()["exceptions"]
+        if row["external_ref"] == "manual_bad_ref"
+        for issue in row["issues"]
+    }
+    assert "invalid_amount" in issues
+    assert "processor_reference_format" in issues
 
 
 def test_company_scope_is_shared_but_individual_accounts_are_isolated():

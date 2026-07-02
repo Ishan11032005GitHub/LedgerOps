@@ -27,6 +27,7 @@ def _https(url: str) -> bool:
 
 
 def deployment_readiness(settings: Settings, engine) -> dict:
+    compliance_provider = settings.compliance_provider.strip().lower()
     checks = [
         ReadinessCheck(
             "database",
@@ -83,8 +84,8 @@ def deployment_readiness(settings: Settings, engine) -> dict:
                 ),
                 ReadinessCheck(
                     "compliance",
-                    settings.compliance_provider == "http" and bool(settings.compliance_provider_url),
-                    "Compliance screening adapter configured" if settings.compliance_provider == "http" and settings.compliance_provider_url else "Configure the HTTP KYC/AML screening adapter",
+                    compliance_provider == "manual" or (compliance_provider == "http" and bool(settings.compliance_provider_url)),
+                    "Manual compliance review gate configured" if compliance_provider == "manual" else "Compliance screening adapter configured" if compliance_provider == "http" and settings.compliance_provider_url else "Configure manual compliance review or the HTTP KYC/AML screening adapter",
                     "live_money",
                 ),
                 ReadinessCheck(

@@ -78,3 +78,30 @@ def test_live_readiness_passes_when_all_launch_gates_are_configured(monkeypatch)
     report = deployment_readiness(settings, object())
     assert report["ready"] is True
     assert report["blocking"] == []
+
+
+def test_live_readiness_accepts_manual_compliance_gate(monkeypatch):
+    monkeypatch.setattr("app.services.readiness.inspect", lambda _engine: Inspector())
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        demo_only=False,
+        database_url="postgresql+psycopg://example",
+        jwt_secret="x" * 40,
+        frontend_url="https://app.example.com",
+        cors_origins="https://app.example.com",
+        smtp_host="smtp.example.com",
+        smtp_from_email="security@example.com",
+        gemini_api_key="configured",
+        stripe_secret_key="sk_live_configured",
+        stripe_webhook_secret="whsec_configured",
+        compliance_provider="manual",
+        database_backups_configured=True,
+        monitoring_configured=True,
+        legal_review_completed=True,
+        security_review_completed=True,
+        restricted_pilot_enabled=True,
+    )
+    report = deployment_readiness(settings, object())
+    assert report["ready"] is True
+    assert report["blocking"] == []

@@ -25,14 +25,15 @@ function downloadBlob(blob, filename) {
 }
 
 async function loadWorkspace() {
-  const [payments, invoices, clients, alerts, quicklinks] = await Promise.all([
+  const [payments, invoices, clients, alerts, quicklinks, reconciliationHistory] = await Promise.all([
     api("/api/payments").catch(() => []),
     api("/api/invoices").catch(() => []),
     api("/api/customers").catch(() => []),
     api("/api/alerts").catch(() => []),
     api("/api/payment-app/quicklinks").catch(() => []),
+    api("/api/payment-app/reconciliation").catch(() => []),
   ]);
-  return { payments, invoices, clients, alerts, quicklinks };
+  return { payments, invoices, clients, alerts, quicklinks, reconciliationHistory };
 }
 
 function severityClass(value) {
@@ -332,6 +333,7 @@ function ReconciliationDashboard({ data, reconciliation, setReconciliation, busy
   const matched = reconciliation?.matched_count ?? data.payments.filter((payment) => payment.external_ref).length;
   const checked = reconciliation?.checked_count ?? data.payments.length;
   const exceptions = reconciliation?.exceptions || data.payments.filter((payment) => !payment.external_ref).map((payment) => ({ payment_id: payment.id, issues: ["missing_processor_reference"] }));
+  const history = reconciliation ? [reconciliation, ...(data.reconciliationHistory || [])].filter((item, index, rows) => rows.findIndex((row) => row.id === item.id) === index) : data.reconciliationHistory || [];
   return (
     <>
       <PageHero eyebrow="Settlement control" title="Reconciliation Dashboard" helper="Compare LedgerOps records against processor references and invoice settlement state." icon={RefreshCw}
@@ -341,7 +343,25 @@ function ReconciliationDashboard({ data, reconciliation, setReconciliation, busy
         <MetricCard label="Matched" value={matched} />
         <MetricCard label="Exceptions" value={exceptions.length} tone={exceptions.length ? "danger" : "success"} />
       </div>
-      <div className="mt-4"><Card title="Exceptions">{exceptions.length ? <div className="mt-4 space-y-3">{exceptions.map((item, index) => <div key={index} className="rounded-md border border-coral/30 bg-coral/5 p-3 text-sm">Payment {item.payment_id}: {(item.issues || []).join(", ")}</div>)}</div> : <Empty label="No reconciliation exceptions detected." />}</Card></div>
+      <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_360px]">
+        <Card title="Exceptions">{exceptions.length ? <div className="mt-4 space-y-3">{exceptions.map((item, index) => <div key={index} className="rounded-md border border-coral/30 bg-coral/5 p-3 text-sm">Payment {item.payment_id}: {(item.issues || []).join(", ")}</div>)}</div> : <Empty label="No reconciliation exceptions detected." />}</Card>
+        <Card title="Recent runs">
+          <div className="mt-4 space-y-3">
+            {history.slice(0, 6).map((run) => (
+              <div key={run.id} className="rounded-md border border-slate-200 p-3 text-sm">
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-medium">Run #{run.id}</span>
+                  <span className={run.exception_count ? "text-coral" : "text-mint"}>{run.exception_count || 0} exceptions</span>
+                </div>
+                <div className="mt-1 text-xs text-steel">
+                  {run.completed_at ? new Date(run.completed_at).toLocaleString() : "In progress"} | {run.matched_count || 0}/{run.checked_count || 0} matched
+                </div>
+              </div>
+            ))}
+            {!history.length && <Empty label="Run reconciliation to build history." />}
+          </div>
+        </Card>
+      </div>
     </>
   );
 }

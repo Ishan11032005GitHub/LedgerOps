@@ -12,6 +12,7 @@ from ..schemas import DemoChatIn, DemoQuickLinkPayIn, PaymentAppConnectIn, Payme
 from ..services.audit import record_audit
 from ..services.compliance_gateway import preflight_collection
 from ..services.events import enqueue_event, process_event
+from ..services.money_state import transition_payment, transition_quicklink
 from ..services.payment_provider import charge_saved_card, create_card_setup_session, create_checkout_link, create_quicklink_checkout, provider_status, retrieve_card_setup_session, retrieve_checkout_session, verified_stripe_event
 from ..services.processors import get_processor
 from ..services.remittance import build_receipt_pdf, build_remittance_pdf
@@ -77,7 +78,7 @@ def payment_method_out(method: PaymentMethod):
 
 def quicklink_out(link: QuickLink) -> dict:
     now = datetime.utcnow()
-    status = "expired" if link.status == "active" and link.expires_at and link.expires_at < now else link.status
+    status = "expired" if link.status in {"active", "pending_review"} and link.expires_at and link.expires_at < now else link.status
     return {
         "id": link.id,
         "public_id": link.public_id,
@@ -126,7 +127,7 @@ def settle_quicklink(db: Session, session: dict, link: QuickLink):
     if round(paid_amount, 2) != round(link.amount, 2) or paid_currency != link.currency.upper():
         raise HTTPException(status_code=409, detail="Checkout amount or currency does not match the QuickLink")
     _invoice, payment, customer = record_completed_checkout(db, session, link.invoice_id, user_id=link.user_id)
-    link.status = "paid"
+    transition_quicklink(link, "paid")
     link.payment_id = payment.id
     link.paid_at = datetime.utcnow()
     db.commit()
@@ -329,6 +330,13 @@ def add_payment_method(payload: PaymentMethodIn, db: Session = Depends(get_db), 
     is_first = not db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).first()
     method = PaymentMethod(user_id=user.id, is_default=is_first, **payload.model_dump())
     db.add(method)
+    record_audit(
+        db,
+        user=user,
+        action="payment_method.added",
+        entity_type="payment_method",
+        details={"brand": payload.brand, "last_four": payload.last_four, "is_default": is_first},
+    )
     db.commit()
     db.refresh(method)
     return payment_method_out(method)
@@ -406,6 +414,13 @@ async def complete_payment_method_setup(checkout_id: str, db: Session = Depends(
         provider_token=provider_token,
     )
     db.add(method)
+    record_audit(
+        db,
+        user=user,
+        action="payment_method.setup_completed",
+        entity_type="payment_method",
+        details={"checkout_id": checkout_id, "brand": method.brand, "last_four": method.last_four, "is_default": is_first},
+    )
     db.commit()
     db.refresh(method)
     return payment_method_out(method)
@@ -418,6 +433,14 @@ def set_default_payment_method(method_id: int, db: Session = Depends(get_db), us
         raise HTTPException(status_code=404, detail="Payment method not found")
     db.query(PaymentMethod).filter(PaymentMethod.user_id == user.id).update({PaymentMethod.is_default: False})
     method.is_default = True
+    record_audit(
+        db,
+        user=user,
+        action="payment_method.default_changed",
+        entity_type="payment_method",
+        entity_id=method.id,
+        details={"brand": method.brand, "last_four": method.last_four},
+    )
     db.commit()
     db.refresh(method)
     return payment_method_out(method)
@@ -429,6 +452,14 @@ def remove_payment_method(method_id: int, db: Session = Depends(get_db), user: U
     if not method:
         raise HTTPException(status_code=404, detail="Payment method not found")
     was_default = method.is_default
+    record_audit(
+        db,
+        user=user,
+        action="payment_method.removed",
+        entity_type="payment_method",
+        entity_id=method.id,
+        details={"brand": method.brand, "last_four": method.last_four, "was_default": was_default},
+    )
     db.delete(method)
     db.commit()
     if was_default:
@@ -529,7 +560,7 @@ def pay_demo_quicklink(public_id: str, payload: DemoQuickLinkPayIn, db: Session 
     if link.status != "active":
         raise HTTPException(status_code=409, detail=f"This payment link is {link.status}")
     if link.expires_at and link.expires_at < datetime.utcnow():
-        link.status = "expired"
+        transition_quicklink(link, "expired")
         db.commit()
         raise HTTPException(status_code=409, detail="This payment link has expired")
     session = {
@@ -587,6 +618,7 @@ async def create_quicklink(payload: QuickLinkCreateIn, db: Session = Depends(get
         currency=payload.currency,
         purpose_code=normalized_purpose,
         invoice_id=invoice.id if invoice else None,
+        status="pending_review" if screening.requires_manual_review else "active",
         expires_at=datetime.utcnow() + timedelta(days=payload.expires_in_days),
     )
     db.add(link)
@@ -597,8 +629,19 @@ async def create_quicklink(payload: QuickLinkCreateIn, db: Session = Depends(get
         action="quicklink.compliance_preflight",
         entity_type="quicklink",
         entity_id=link.id,
-        details={"status": screening.status, "provider": screening.provider, "purpose_code": normalized_purpose},
+        details={"status": screening.status, "provider": screening.provider, "purpose_code": normalized_purpose, "manual_review": screening.requires_manual_review},
     )
+    if screening.requires_manual_review:
+        event = enqueue_event(
+            db,
+            "quicklink.manual_review_required",
+            {"quicklink_id": link.id, "public_id": link.public_id, "amount": link.amount, "currency": link.currency, "purpose_code": normalized_purpose},
+            user_id=user.id,
+        )
+        return quicklink_out(link) | {
+            "event_id": event.id,
+            "message": "QuickLink created and waiting for manual compliance approval before checkout is enabled.",
+        }
     checkout = await create_quicklink_checkout(link, user)
     link.provider = checkout.provider
     link.provider_mode = checkout.mode
@@ -613,6 +656,42 @@ async def create_quicklink(payload: QuickLinkCreateIn, db: Session = Depends(get
     return quicklink_out(link) | {"event_id": event.id}
 
 
+@router.post("/quicklinks/{link_id}/approve", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
+async def approve_quicklink(link_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
+    link = db.query(QuickLink).filter(QuickLink.id == link_id, QuickLink.user_id.in_(account_user_ids(db, user))).first()
+    if not link:
+        raise HTTPException(status_code=404, detail="QuickLink not found")
+    if link.status == "active":
+        return quicklink_out(link) | {"message": "QuickLink is already approved."}
+    if link.status != "pending_review":
+        raise HTTPException(status_code=409, detail=f"QuickLink cannot be approved from {link.status} status")
+    if link.expires_at and link.expires_at < datetime.utcnow():
+        transition_quicklink(link, "expired")
+        db.commit()
+        return quicklink_out(link) | {"message": "QuickLink expired before approval."}
+    transition_quicklink(link, "active")
+    checkout = await create_quicklink_checkout(link, user)
+    link.provider = checkout.provider
+    link.provider_mode = checkout.mode
+    link.checkout_id = checkout.checkout_id
+    link.checkout_url = checkout.checkout_url
+    record_audit(
+        db,
+        user=user,
+        action="quicklink.manual_compliance_approved",
+        entity_type="quicklink",
+        entity_id=link.id,
+        details={"amount": link.amount, "currency": link.currency, "purpose_code": link.purpose_code},
+    )
+    event = enqueue_event(
+        db,
+        "quicklink.approved",
+        {"quicklink_id": link.id, "public_id": link.public_id, "checkout_id": checkout.checkout_id, "amount": link.amount, "currency": link.currency},
+        user_id=user.id,
+    )
+    return quicklink_out(link) | {"event_id": event.id, "message": "Manual compliance approved. Checkout is ready to share."}
+
+
 @router.post("/quicklinks/{link_id}/verify", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
 async def verify_quicklink(link_id: int, db: Session = Depends(get_db), user: User = Depends(current_user)):
     link = db.query(QuickLink).filter(QuickLink.id == link_id, QuickLink.user_id.in_(account_user_ids(db, user))).first()
@@ -620,8 +699,10 @@ async def verify_quicklink(link_id: int, db: Session = Depends(get_db), user: Us
         raise HTTPException(status_code=404, detail="QuickLink not found")
     if link.status == "paid":
         return quicklink_out(link)
+    if link.status == "pending_review":
+        return quicklink_out(link) | {"message": "Manual compliance approval is required before checkout verification."}
     if link.expires_at and link.expires_at < datetime.utcnow():
-        link.status = "expired"
+        transition_quicklink(link, "expired")
         db.commit()
         return quicklink_out(link)
     session = await retrieve_checkout_session(link.checkout_id)
@@ -631,6 +712,15 @@ async def verify_quicklink(link_id: int, db: Session = Depends(get_db), user: Us
         return quicklink_out(link) | {"message": "The card payment has not settled yet."}
     payment, _customer = settle_quicklink(db, session, link)
     enqueue_event(db, "quicklink.paid", {"quicklink_id": link.id, "payment_id": payment.id, "external_ref": payment.external_ref}, user_id=link.user_id)
+    record_audit(
+        db,
+        user=user,
+        action="quicklink.verified_paid",
+        entity_type="quicklink",
+        entity_id=link.id,
+        details={"payment_id": payment.id, "external_ref": payment.external_ref, "amount": payment.amount, "currency": payment.currency},
+    )
+    db.commit()
     return quicklink_out(link)
 
 
@@ -641,7 +731,15 @@ def disable_quicklink(link_id: int, db: Session = Depends(get_db), user: User = 
         raise HTTPException(status_code=404, detail="QuickLink not found")
     if link.status == "paid":
         raise HTTPException(status_code=409, detail="Paid QuickLinks remain in the settlement record")
-    link.status = "disabled"
+    transition_quicklink(link, "disabled")
+    record_audit(
+        db,
+        user=user,
+        action="quicklink.disabled",
+        entity_type="quicklink",
+        entity_id=link.id,
+        details={"public_id": link.public_id, "amount": link.amount, "currency": link.currency},
+    )
     db.commit()
     return quicklink_out(link)
 
@@ -790,8 +888,9 @@ async def refund_quicklink(link_id: int, payload: RefundCreateIn, db: Session = 
     )
     db.add(refund)
     total_refunded = round(refunded + result.amount, 2)
-    link.status = "refunded" if total_refunded >= payment.amount else "partially_refunded"
-    payment.status = link.status
+    next_status = "refunded" if total_refunded >= payment.amount else "partially_refunded"
+    transition_quicklink(link, next_status)
+    transition_payment(payment, next_status)
     record_audit(
         db,
         user=user,
@@ -822,9 +921,16 @@ async def reconcile_payments(db: Session = Depends(get_db), user: User = Depends
     payments = db.query(Payment).filter(Payment.user_id.in_(scope)).order_by(Payment.received_at.desc()).limit(500).all()
     exceptions = []
     matched = 0
+    seen_refs: dict[str, int] = {}
     for payment in payments:
         invoice = db.get(Invoice, payment.invoice_id) if payment.invoice_id else None
         issues = []
+        if payment.external_ref and payment.external_ref in seen_refs:
+            issues.append("duplicate_processor_reference")
+        elif payment.external_ref:
+            seen_refs[payment.external_ref] = payment.id
+        if payment.amount <= 0:
+            issues.append("invalid_amount")
         if invoice and round(invoice.amount, 2) != round(payment.amount, 2):
             issues.append("amount_mismatch")
         if invoice and invoice.currency.upper() != payment.currency.upper():
@@ -833,6 +939,12 @@ async def reconcile_payments(db: Session = Depends(get_db), user: User = Depends
             issues.append("invoice_not_marked_paid")
         if not payment.external_ref:
             issues.append("missing_processor_reference")
+        if payment.status not in {"processing", "settled", "partially_refunded", "refunded", "disputed", "failed", "cancelled"}:
+            issues.append("unknown_payment_status")
+        if payment.status == "processing" and (datetime.utcnow() - payment.received_at).total_seconds() > 86400:
+            issues.append("stale_processing_payment")
+        if payment.rail == "Card checkout" and not payment.external_ref.startswith(("pi_", "cs_", "demo_card_")):
+            issues.append("processor_reference_format")
         if issues:
             exceptions.append({"payment_id": payment.id, "external_ref": payment.external_ref, "issues": issues})
         else:
@@ -863,6 +975,25 @@ async def reconcile_payments(db: Session = Depends(get_db), user: User = Depends
     }
 
 
+@router.get("/reconciliation", dependencies=[Depends(require_roles(Role.admin, Role.finance_manager))])
+def reconciliation_history(db: Session = Depends(get_db), user: User = Depends(current_user)):
+    scope = account_user_ids(db, user)
+    runs = db.query(ReconciliationRun).filter(ReconciliationRun.user_id.in_(scope)).order_by(ReconciliationRun.started_at.desc()).limit(25).all()
+    return [
+        {
+            "id": run.id,
+            "status": run.status,
+            "checked_count": run.checked_count,
+            "matched_count": run.matched_count,
+            "exception_count": run.exception_count,
+            "exceptions": run.exceptions,
+            "started_at": run.started_at.isoformat(),
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        }
+        for run in runs
+    ]
+
+
 @router.get("/audit-log", dependencies=[Depends(require_roles(Role.admin))])
 def audit_log(db: Session = Depends(get_db), user: User = Depends(current_user)):
     scope = account_user_ids(db, user)
@@ -885,8 +1016,7 @@ def audit_log(db: Session = Depends(get_db), user: User = Depends(current_user))
 async def stripe_webhook(request: Request, background: BackgroundTasks, db: Session = Depends(get_db)):
     event = await verified_stripe_event(request)
     stripe_event_id = event.get("id")
-    recent_completed = db.query(EventLog).filter(EventLog.event_type == "stripe.checkout.completed").order_by(EventLog.created_at.desc()).limit(100).all()
-    duplicate = next((stored for stored in recent_completed if stored.payload.get("stripe_event_id") == stripe_event_id), None) if stripe_event_id else None
+    duplicate = db.query(EventLog).filter(EventLog.external_id == stripe_event_id).first() if stripe_event_id else None
     if duplicate:
         return {"status": "already_processed", "event_id": duplicate.id}
     if event.get("type") == "charge.dispute.created":
@@ -894,7 +1024,8 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: Sess
         payment_ref = dispute.get("payment_intent")
         payment = db.query(Payment).filter(Payment.external_ref == payment_ref).first() if payment_ref else None
         if payment:
-            payment.status = "disputed"
+            transition_payment(payment, "disputed")
+            db.query(QuickLink).filter(QuickLink.payment_id == payment.id).update({"status": "disputed"})
             db.add(Alert(
                 user_id=payment.user_id,
                 severity="high",
@@ -913,7 +1044,7 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: Sess
                 details={"dispute_id": dispute.get("id"), "reason": dispute.get("reason")},
             )
             db.commit()
-        stored = enqueue_event(db, "payment.dispute.opened", {"stripe_event_id": stripe_event_id, "payment_id": payment.id if payment else None, "dispute_id": dispute.get("id")}, user_id=payment.user_id if payment else None)
+        stored = enqueue_event(db, "payment.dispute.opened", {"stripe_event_id": stripe_event_id, "payment_id": payment.id if payment else None, "dispute_id": dispute.get("id")}, user_id=payment.user_id if payment else None, external_id=stripe_event_id)
         return {"status": "processed", "event_id": stored.id}
     if event.get("type") == "charge.refunded":
         charge = event.get("data", {}).get("object", {})
@@ -921,22 +1052,23 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: Sess
         payment = db.query(Payment).filter(Payment.external_ref == payment_ref).first() if payment_ref else None
         if payment:
             refunded_amount = (charge.get("amount_refunded") or 0) / 100
-            payment.status = "refunded" if refunded_amount >= payment.amount else "partially_refunded"
-            db.query(QuickLink).filter(QuickLink.payment_id == payment.id).update({"status": payment.status})
+            next_status = "refunded" if refunded_amount >= payment.amount else "partially_refunded"
+            transition_payment(payment, next_status)
+            db.query(QuickLink).filter(QuickLink.payment_id == payment.id).update({"status": next_status})
             db.commit()
-        stored = enqueue_event(db, "payment.refund.updated", {"stripe_event_id": stripe_event_id, "payment_id": payment.id if payment else None, "amount_refunded": (charge.get("amount_refunded") or 0) / 100}, user_id=payment.user_id if payment else None)
+        stored = enqueue_event(db, "payment.refund.updated", {"stripe_event_id": stripe_event_id, "payment_id": payment.id if payment else None, "amount_refunded": (charge.get("amount_refunded") or 0) / 100}, user_id=payment.user_id if payment else None, external_id=stripe_event_id)
         return {"status": "processed", "event_id": stored.id}
     if event.get("type") not in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
-        stored = enqueue_event(db, "stripe.webhook.ignored", {"stripe_event_id": event.get("id"), "type": event.get("type")})
+        stored = enqueue_event(db, "stripe.webhook.ignored", {"stripe_event_id": event.get("id"), "type": event.get("type")}, external_id=stripe_event_id)
         return {"status": "ignored", "event_id": stored.id}
 
     session = event.get("data", {}).get("object", {})
     metadata = session.get("metadata") or {}
     if (not metadata.get("invoice_id") and not metadata.get("quicklink_id")) or not metadata.get("ledgerops_user_id"):
-        stored = enqueue_event(db, "stripe.webhook.ignored", {"stripe_event_id": stripe_event_id, "type": event.get("type"), "reason": "not_a_ledgerops_checkout"})
+        stored = enqueue_event(db, "stripe.webhook.ignored", {"stripe_event_id": stripe_event_id, "type": event.get("type"), "reason": "not_a_ledgerops_checkout"}, external_id=stripe_event_id)
         return {"status": "ignored", "event_id": stored.id}
     if event.get("type") == "checkout.session.completed" and session.get("payment_status") != "paid":
-        stored = enqueue_event(db, "stripe.checkout.pending", {"stripe_event_id": stripe_event_id, "invoice_id": metadata.get("invoice_id")})
+        stored = enqueue_event(db, "stripe.checkout.pending", {"stripe_event_id": stripe_event_id, "invoice_id": metadata.get("invoice_id")}, external_id=stripe_event_id)
         return {"status": "pending", "event_id": stored.id}
     quicklink_id = int(metadata["quicklink_id"]) if metadata.get("quicklink_id") else None
     invoice_id = int(metadata["invoice_id"]) if metadata.get("invoice_id") else None
@@ -949,7 +1081,7 @@ async def stripe_webhook(request: Request, background: BackgroundTasks, db: Sess
     else:
         invoice, payment, _customer = record_completed_checkout(db, session, invoice_id)
         event_payload = {"stripe_event_id": event.get("id"), "invoice_id": invoice.id if invoice else invoice_id, "external_ref": payment.external_ref}
-    stored = enqueue_event(db, "stripe.checkout.completed", event_payload, user_id=payment.user_id)
+    stored = enqueue_event(db, "stripe.checkout.completed", event_payload, user_id=payment.user_id, external_id=stripe_event_id)
     background.add_task(process_event_background, stored.id)
     return {"status": "processed", "event_id": stored.id}
 
@@ -978,6 +1110,15 @@ async def verify_checkout(checkout_id: str, db: Session = Depends(get_db), user:
         raise HTTPException(status_code=403, detail="Checkout ownership does not match the invoice")
     invoice, payment, customer = record_completed_checkout(db, session, invoice_id, user_id=invoice_record.user_id)
     stored = enqueue_event(db, "stripe.checkout.manually_verified", {"checkout_id": checkout_id, "invoice_id": invoice.id if invoice else invoice_id, "external_ref": payment.external_ref}, user_id=user.id)
+    record_audit(
+        db,
+        user=user,
+        action="checkout.manually_verified",
+        entity_type="payment",
+        entity_id=payment.id,
+        details={"checkout_id": checkout_id, "invoice_id": invoice.id if invoice else invoice_id, "external_ref": payment.external_ref},
+    )
+    db.commit()
     return {
         "status": "verified",
         "checkout_id": checkout_id,
@@ -1029,6 +1170,15 @@ async def pay(payload: WalletTransferIn, background: BackgroundTasks, db: Sessio
             DemoMessage(sender_id=user.id, recipient_id=recipient.id, kind="payment", text=f"Paid INR {payload.amount:,.2f}", note=payload.note, amount_minor=amount_minor, currency="INR", status="completed"),
         ])
         event = enqueue_event(db, "wallet.payment.sent", payload.model_dump() | {"payment_id": sender_payment.id, "external_ref": sender_payment.external_ref, "funding_source": "Demo balance"}, user_id=user.id)
+        record_audit(
+            db,
+            user=user,
+            action="wallet.payment.sent",
+            entity_type="payment",
+            entity_id=sender_payment.id,
+            details={"recipient": recipient.name, "amount": payload.amount, "currency": "INR", "external_ref": sender_payment.external_ref, "demo": True},
+        )
+        db.commit()
         return {"status": "settled", "payment_id": sender_payment.id, "external_ref": sender_payment.external_ref, "recipient": recipient.name, "amount": payload.amount, "currency": "INR", "funding_source": "Demo balance", "event_id": event.id}
 
     provider = provider_status()
@@ -1065,6 +1215,15 @@ async def pay(payload: WalletTransferIn, background: BackgroundTasks, db: Sessio
     db.flush()
     db.add(Transaction(user_id=user.id, payment_id=payment.id, type="outbound", amount=payload.amount, currency=payload.currency, country=customer.country, counterparty=payload.recipient_name, risk_score=22))
     event = enqueue_event(db, "wallet.payment.sent", payload.model_dump() | {"payment_id": payment.id, "external_ref": external_ref, "funding_source": payment_rail}, user_id=user.id)
+    record_audit(
+        db,
+        user=user,
+        action="wallet.payment.sent",
+        entity_type="payment",
+        entity_id=payment.id,
+        details={"recipient": payload.recipient_name, "amount": payload.amount, "currency": payload.currency, "external_ref": external_ref, "funding_source": payment_rail},
+    )
+    db.commit()
     background.add_task(process_event_background, event.id)
     return {"status": payment.status, "payment_id": payment.id, "external_ref": external_ref, "recipient": payload.recipient_name, "amount": payload.amount, "currency": payload.currency, "funding_source": payment_rail}
 
@@ -1080,10 +1239,26 @@ def request_money(payload: WalletRequestIn, background: BackgroundTasks, db: Ses
             raise HTTPException(status_code=400, detail="Demo wallets use INR")
         message = DemoMessage(sender_id=user.id, recipient_id=payer.id, kind="request", text=f"Requested INR {payload.amount:,.2f}", note=payload.note, amount_minor=int(round(payload.amount * 100)), currency="INR", status="pending")
         db.add(message)
+        record_audit(
+            db,
+            user=user,
+            action="wallet.payment.requested",
+            entity_type="demo_message",
+            details={"payer": payer.name, "amount": payload.amount, "currency": "INR", "demo": True},
+        )
         db.commit()
         db.refresh(message)
         return {"status": "requested", "request_id": f"demo_request_{message.id}", "payer": payer.name, "amount": payload.amount, "currency": "INR"}
     request_id = f"wallet_req_{int(datetime.utcnow().timestamp())}"
     event = enqueue_event(db, "wallet.payment.requested", payload.model_dump() | {"request_id": request_id}, user_id=user.id)
+    record_audit(
+        db,
+        user=user,
+        action="wallet.payment.requested",
+        entity_type="payment_request",
+        entity_id=request_id,
+        details={"payer": payload.payer_name, "amount": payload.amount, "currency": payload.currency},
+    )
+    db.commit()
     background.add_task(process_event_background, event.id)
     return {"status": "requested", "request_id": request_id, "payer": payload.payer_name, "amount": payload.amount, "currency": payload.currency}

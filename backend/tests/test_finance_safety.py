@@ -49,6 +49,24 @@ def test_live_compliance_is_fail_closed_without_provider(monkeypatch):
     get_settings.cache_clear()
 
 
+def test_manual_compliance_adapter_requires_human_approval(monkeypatch):
+    monkeypatch.setenv("COMPLIANCE_PROVIDER", "manual")
+    get_settings.cache_clear()
+    result = preflight_collection(
+        amount=2500,
+        currency="USD",
+        purpose_code="services",
+        payer_name="Example Client",
+        payer_email="billing@example.com",
+        payer_country="US",
+        demo=False,
+    )
+    assert result.status == "manual_review_required"
+    assert result.provider == "manual"
+    assert result.requires_manual_review
+    get_settings.cache_clear()
+
+
 def test_http_compliance_adapter_requires_explicit_clear(monkeypatch):
     class Response:
         def raise_for_status(self):

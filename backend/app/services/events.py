@@ -1,15 +1,28 @@
 from datetime import datetime
 import redis
+from sqlalchemy.exc import IntegrityError
 from tenacity import retry, stop_after_attempt, wait_exponential
 from sqlalchemy.orm import Session
 from ..config import get_settings
 from ..models import Alert, EventLog
 
 
-def enqueue_event(db: Session, event_type: str, payload: dict, user_id: int | None = None) -> EventLog:
-    event = EventLog(user_id=user_id, event_type=event_type, payload=payload, status="queued")
+def enqueue_event(db: Session, event_type: str, payload: dict, user_id: int | None = None, external_id: str | None = None) -> EventLog:
+    if external_id:
+        existing = db.query(EventLog).filter(EventLog.external_id == external_id).first()
+        if existing:
+            return existing
+    event = EventLog(user_id=user_id, event_type=event_type, external_id=external_id, payload=payload, status="queued")
     db.add(event)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        if external_id:
+            existing = db.query(EventLog).filter(EventLog.external_id == external_id).first()
+            if existing:
+                return existing
+        raise
     db.refresh(event)
     try:
         client = redis.from_url(get_settings().redis_url, decode_responses=True)

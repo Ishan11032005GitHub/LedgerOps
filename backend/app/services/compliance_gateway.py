@@ -20,6 +20,7 @@ class ScreeningResult:
     status: str
     provider: str
     reference: str | None = None
+    requires_manual_review: bool = False
 
 
 def preflight_collection(*, amount: float, currency: str, purpose_code: str, payer_name: str | None,
@@ -35,7 +36,15 @@ def preflight_collection(*, amount: float, currency: str, purpose_code: str, pay
         raise HTTPException(status_code=400, detail="Live international collection requires payer name, email, and country")
     if not settings.compliance_provider:
         raise HTTPException(status_code=503, detail="Live collection is blocked until a KYC/AML screening provider is configured")
-    if settings.compliance_provider.strip().lower() == "http":
+    provider = settings.compliance_provider.strip().lower()
+    if provider == "manual":
+        return ScreeningResult(
+            status="manual_review_required",
+            provider="manual",
+            reference=None,
+            requires_manual_review=True,
+        )
+    if provider == "http":
         if not settings.compliance_provider_url:
             raise HTTPException(status_code=503, detail="The compliance screening endpoint is not configured")
         headers = {"Content-Type": "application/json"}

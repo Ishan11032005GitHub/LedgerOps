@@ -43,6 +43,7 @@ const blankForm = {
 function statusStyle(status) {
   if (status === "paid") return "bg-mint/10 text-mint";
   if (status === "active") return "bg-blue-50 text-blue-700";
+  if (status === "pending_review") return "bg-amber-100 text-amber-800";
   if (status === "expired") return "bg-amber-100 text-amber-800";
   return "bg-slate-100 text-steel";
 }
@@ -89,7 +90,7 @@ export default function QuickLinks() {
       setForm(blankForm);
       setCreatedLink(created);
       setNoticeTone("success");
-      setNotice("QuickLink is ready to share.");
+      setNotice(created.status === "pending_review" ? "QuickLink is waiting for manual compliance approval." : "QuickLink is ready to share.");
     } catch (error) {
       setNoticeTone("error");
       setNotice(error.message);
@@ -99,9 +100,27 @@ export default function QuickLinks() {
   }
 
   async function copyLink(link) {
+    if (!link.checkout_url) return;
     await navigator.clipboard.writeText(link.checkout_url);
     setCopiedId(link.id);
     window.setTimeout(() => setCopiedId(null), 1600);
+  }
+
+  async function approve(link) {
+    setLoading(`approve-${link.id}`);
+    setNotice("");
+    try {
+      const result = await api(`/api/payment-app/quicklinks/${link.id}/approve`, { method: "POST" });
+      setLinks((current) => current.map((item) => (item.id === link.id ? result : item)));
+      setCreatedLink(result);
+      setNoticeTone("success");
+      setNotice(result.message || "Manual compliance approved. QuickLink is ready to share.");
+    } catch (error) {
+      setNoticeTone("error");
+      setNotice(error.message);
+    } finally {
+      setLoading("");
+    }
   }
 
   async function verify(link) {
@@ -259,11 +278,17 @@ export default function QuickLinks() {
             )}
             {createdLink && (
               <div className="rounded-md border border-mint/40 bg-mint/5 p-3">
-                <div className="text-sm font-medium">Your QuickLink is ready</div>
-                <div className="mt-1 break-all text-xs text-steel">{createdLink.checkout_url}</div>
+                <div className="text-sm font-medium">{createdLink.status === "pending_review" ? "Manual approval required" : "Your QuickLink is ready"}</div>
+                <div className="mt-1 break-all text-xs text-steel">{createdLink.checkout_url || "Approve this QuickLink from the list before sharing checkout."}</div>
                 <div className="mt-3 flex flex-wrap gap-2">
-                  <button type="button" onClick={() => copyLink(createdLink)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium"><Copy size={14} /> Copy link</button>
-                  <a href={createdLink.checkout_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-md bg-mint px-3 py-2 text-xs font-medium text-white"><ExternalLink size={14} /> Open payer checkout</a>
+                  {createdLink.status === "pending_review" ? (
+                    <button type="button" onClick={() => approve(createdLink)} disabled={loading === `approve-${createdLink.id}`} className="inline-flex items-center gap-1.5 rounded-md bg-ink px-3 py-2 text-xs font-medium text-white disabled:opacity-60"><ShieldCheck size={14} /> Approve review</button>
+                  ) : (
+                    <>
+                      <button type="button" onClick={() => copyLink(createdLink)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium"><Copy size={14} /> Copy link</button>
+                      <a href={createdLink.checkout_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-md bg-mint px-3 py-2 text-xs font-medium text-white"><ExternalLink size={14} /> Open payer checkout</a>
+                    </>
+                  )}
                 </div>
               </div>
             )}
@@ -278,7 +303,7 @@ export default function QuickLinks() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-medium">{link.title}</h3>
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium capitalize ${statusStyle(link.status)}`}>{link.status}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium capitalize ${statusStyle(link.status)}`}>{link.status.replaceAll("_", " ")}</span>
                     </div>
                     <div className="mt-1 text-lg font-semibold">{formatCurrency(link.amount, link.currency)}</div>
                     <div className="mt-1 text-xs text-steel">
@@ -286,6 +311,9 @@ export default function QuickLinks() {
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    {link.status === "pending_review" && (
+                      <button type="button" onClick={() => approve(link)} disabled={loading === `approve-${link.id}`} className="inline-flex items-center gap-1.5 rounded-md bg-ink px-3 py-2 text-xs font-medium text-white disabled:opacity-60"><ShieldCheck size={14} /> Approve</button>
+                    )}
                     {link.status === "active" && (
                       <>
                         <button type="button" onClick={() => copyLink(link)} className="inline-flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-xs font-medium hover:bg-panel">
@@ -307,11 +335,13 @@ export default function QuickLinks() {
                 </div>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-3">
                   <div className="flex items-center gap-2 text-xs text-steel"><Clock3 size={14} /> Expires {new Date(link.expires_at).toLocaleDateString()}</div>
-                  {link.status === "active" && (
+                  {["active", "pending_review"].includes(link.status) && (
                     <div className="flex gap-2">
-                      <button type="button" onClick={() => verify(link)} disabled={loading === `verify-${link.id}`} className="inline-flex items-center gap-1.5 text-xs font-medium text-steel hover:text-mint disabled:opacity-60">
-                        <RefreshCw size={13} className={loading === `verify-${link.id}` ? "animate-spin" : ""} /> Check payment
-                      </button>
+                      {link.status === "active" && (
+                        <button type="button" onClick={() => verify(link)} disabled={loading === `verify-${link.id}`} className="inline-flex items-center gap-1.5 text-xs font-medium text-steel hover:text-mint disabled:opacity-60">
+                          <RefreshCw size={13} className={loading === `verify-${link.id}` ? "animate-spin" : ""} /> Check payment
+                        </button>
+                      )}
                       <button type="button" onClick={() => disable(link)} disabled={loading === `disable-${link.id}`} className="inline-flex items-center gap-1.5 text-xs font-medium text-steel hover:text-coral disabled:opacity-60"><Ban size={13} /> Disable</button>
                     </div>
                   )}

@@ -253,6 +253,23 @@ function demoResponse(path, options = {}) {
     if (!result) throw new Error("QuickLink not found");
     return result;
   }
+  if (path.match(/^\/api\/payment-app\/quicklinks\/\d+\/approve$/) && method === "POST") {
+    const linkId = Number(path.split("/")[4]);
+    let result;
+    const links = storedQuickLinks(activeUser).map((item) => {
+      if (item.id !== linkId) return item;
+      result = {
+        ...item,
+        status: "active",
+        checkout_id: item.checkout_id || `ql_demo_${Date.now()}`,
+        checkout_url: item.checkout_url || `${window.location.origin}/quicklinks?demo_checkout=${Date.now()}`,
+      };
+      return result;
+    });
+    localStorage.setItem(scopedKey("ig_quicklinks", activeUser), JSON.stringify(links));
+    if (!result) throw new Error("QuickLink not found");
+    return { ...result, message: "Manual compliance approved. Checkout is ready to share." };
+  }
   if (path.match(/^\/api\/payment-app\/quicklinks\/\d+\/refund$/) && method === "POST") {
     const linkId = Number(path.split("/")[4]);
     let result;
@@ -321,6 +338,9 @@ function demoResponse(path, options = {}) {
   }
   if (path === "/api/payment-app/reconciliation" && method === "POST") {
     return { id: Date.now(), status: "completed", checked_count: payments.length, matched_count: payments.length, exception_count: 0, exceptions: [], completed_at: new Date().toISOString() };
+  }
+  if (path === "/api/payment-app/reconciliation" && method === "GET") {
+    return [];
   }
   if (path.startsWith("/api/predict/") || path === "/api/compliance/check") return { status: "completed", mode: "offline test", recommendation: "Review high-value, delayed, or volatile-currency items before settlement." };
   if (path === "/api/copilot") return seededDemo ? { answer: "Offline test mode: the riskiest invoices are pending high-value invoices in ZAR and EUR, especially INV-2026-1040 and INV-2026-1032.", state_used: { pending_invoices: 3, highest_risk_currency: "ZAR" } } : { answer: "This account does not have finance data yet. Add payments, invoices, or a payment provider to start analysis.", state_used: { pending_invoices: 0 } };

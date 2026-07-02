@@ -159,6 +159,7 @@ class Payment(Base):
 
 class QuickLink(Base):
     __tablename__ = "quick_links"
+    __table_args__ = (UniqueConstraint("checkout_id", name="uq_quick_links_checkout_id"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     public_id: Mapped[str] = mapped_column(String(48), unique=True, index=True)
@@ -286,9 +287,11 @@ class ComplianceCheck(Base):
 
 class EventLog(Base):
     __tablename__ = "event_logs"
+    __table_args__ = (UniqueConstraint("external_id", name="uq_event_logs_external_id"),)
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     event_type: Mapped[str] = mapped_column(String(80), index=True)
+    external_id: Mapped[str | None] = mapped_column(String(160), nullable=True, index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(30), default="queued")
     attempts: Mapped[int] = mapped_column(Integer, default=0)
