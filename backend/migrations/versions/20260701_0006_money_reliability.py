@@ -31,7 +31,6 @@ def upgrade() -> None:
             UPDATE event_logs
             SET external_id = payload ->> 'stripe_event_id'
             WHERE external_id IS NULL
-              AND payload ? 'stripe_event_id'
               AND payload ->> 'stripe_event_id' IS NOT NULL
             """
         )
